@@ -12,8 +12,14 @@ free也是希望写出的代码可以随意的,自由的从此代码移植到自
 
 ## python环境
 ```python
-python 3.11.5
+python 3.11.9
 torch 2.3.1+cu121
 gymnasium[all] 0.29.1
 pygame 0.25.2 # 这个版本和gymnasium[all]0.29.1兼容
 ```
+## 效果
+用DQN算法在LunarLander-v2环境下训练500个轮次的3个seed的效果：线为均值，阴影为方差
+![alt text](DQN_file/learning_curves/LunarLander-v2/DQN.png)
+用 seed = 0 时训练的模型评估
+![alt text](DQN_file/results/LunarLander-v2/DQN_1/evaluate.png)
+![alt text](DQN_file/results/LunarLander-v2/DQN_1/evaluate.gif)
