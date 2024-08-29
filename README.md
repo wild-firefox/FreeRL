@@ -5,6 +5,7 @@
 * [easy-rl](https://github.com/datawhalechina/easy-rl/blob/master/notebooks/DQN.ipynb)
 * [maddpg-pettingzoo-pytorch](https://github.com/Git-123-Hub/maddpg-pettingzoo-pytorch)
 * [深度强化学习](https://github.com/DeepRLChinese/DeepRL-Chinese/blob/master/04_dqn.py)
+* [reinforcement-learning-algorithm](https://github.com/Git-123-Hub/reinforcement-learning-algorithm)
 
 目的是写出像TD3作者那样简单易懂的DRL代码,  
 由于参考了ElegentRL和Easy的库,from easy to elegent 故起名为freeRL,
