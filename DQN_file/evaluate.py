@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from DQN import DQN
+from DQN_with_tricks import DQN
 from DQN import get_env 
 from DQN import dis_to_con
 
@@ -39,7 +39,8 @@ def plot_evaluate(evaluate_return,goal_return,model_dir,smooth_rate=0.9):
     # 保存
     plt.savefig(os.path.join(model_dir,"evaluate.png"))
 
-def render(env_name,policy,action_dim,dis_to_con_b,model_dir):
+def render(env_name,policy,action_dim,is_dis_to_con,model_dir):
+    '''随机挑选一个episode并保存gif'''
     env = gym.make(env_name,render_mode="rgb_array")
     episode = np.random.randint(args.max_episodes)
     obs,info = env.reset(seed = episode)
@@ -50,7 +51,7 @@ def render(env_name,policy,action_dim,dis_to_con_b,model_dir):
         frames.append(frame)
         action = policy.select_action(obs)
         action_ = action
-        if dis_to_con_b and isinstance(env.action_space, gym.spaces.Box):
+        if is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
             action_ = dis_to_con(action, env, action_dim)
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         done = terminated or truncated
@@ -61,27 +62,45 @@ def render(env_name,policy,action_dim,dis_to_con_b,model_dir):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # 评估模型位置
+    # 评估模型位置 results/env_name/algorithm_trick_n
     parser.add_argument("--results_dir", type=str, default="./DQN_file/results/")
-    parser.add_argument("--env_name", type=str, default="FrozenLake-v1")
-    parser.add_argument("--folder_name", type=str, default="DQN_3") #
+    parser.add_argument("--env_name", type=str, default="MountainCar-v0")
+    parser.add_argument("--folder_name", type=str, default="DQN_Double_1") # 模型文件夹名 model名 + trick名
+    # 环境参数
+    parser.add_argument("--max_action", type=float, default=None)
     # 种子和评估次数设置
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--max_episodes", type=int, default=100) #
+    ## 是否保存gif
+    parser.add_argument("--save_gif", type=bool, default=True)
     # 注意要和训练时一致
-    parser.add_argument("--dis_to_con_b", type=bool, default=True) # dqn 默认为True
+    parser.add_argument("--is_dis_to_con", type=bool, default=True) # dqn 默认为True
+    ## trick和folder_name一致 (尽管有些trick在评估时不会用到,但不少是改变模型结构的会用到)                              
+    parser.add_argument("--trick", type=dict, default={'Double':True,'Dueling':False,'PER':False,'Noisy':False,'N_Step':False,'Categorical':False})  
     args = parser.parse_args()
-
-    env,dim_info, max_action, is_continuous = get_env(args.env_name,args.dis_to_con_b)
+    print(args)
+    print('Algorithm:',args.policy_name)
+    
+    ## 环境配置
+    env,dim_info, max_action, is_continue = get_env(args.env_name,args.is_dis_to_con)
+    max_action = max_action if max_action is not None else args.max_action
     action_dim = dim_info[1]
-    # 结果文件夹
+    print(f'Env:{args.env_name}  obs_dim:{dim_info[0]}  action_dim:{dim_info[1]}  max_action:{max_action}  max_episodes:{args.max_episodes}')
+    # 模型文件夹 - 读取
     results_dir =  args.results_dir if args.results_dir else os.path.join(os.path.dirname(os.path.abspath(__file__)),'./results')
     model_dir = os.path.join(results_dir, args.env_name,args.folder_name) 
 
-    policy = DQN.load(dim_info,model_dir=model_dir)
+    policy = DQN.load(dim_info,is_continue = is_continue ,model_dir=model_dir,trick = args.trick)
+    
+    ## 随机数种子(cpu)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    
+    ### cuda
+    torch.cuda.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print('Random Seed:',args.seed)
+
     # 以不同seed评估100次
     evaluate_return = []
     for e in range(args.max_episodes):
@@ -89,9 +108,11 @@ if __name__ == "__main__":
         episode_reward = 0
         done = False
         while not done:
-            action = policy.select_action(obs)
-            action_ = action
-            if args.dis_to_con_b and isinstance(env.action_space, gym.spaces.Box):
+            if is_continue:
+                action = np.clip(policy.select_action(obs) * max_action,-max_action,max_action)
+            else:  # dqn 默认离散域
+                action = policy.evaluate_action(obs)
+            if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
                 action_ = dis_to_con(action, env, action_dim)  
             next_obs, reward,terminated, truncated, infos = env.step(action_) 
             done = terminated or truncated
@@ -101,11 +122,12 @@ if __name__ == "__main__":
         evaluate_return.append(episode_reward)
         print(f"Episode {e+1} Reward: {episode_reward}")
 
-    # plot
+    # save plot
     env_spec = gym.spec(args.env_name)
     goal_return = env_spec.reward_threshold if env_spec.reward_threshold else None
     plot_evaluate(evaluate_return,goal_return,model_dir,smooth_rate=0.9)
-
-    # 随机挑选一个episode进行展示动画 并保存gif
-    render(args.env_name,policy,action_dim,args.dis_to_con_b,model_dir)
+    
+    # save gif
+    if args.save_gif:
+        render(args.env_name,policy,action_dim,args.is_dis_to_con,model_dir)
 

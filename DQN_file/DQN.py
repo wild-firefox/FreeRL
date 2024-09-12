@@ -20,11 +20,11 @@ from torch.utils.tensorboard import SummaryWriter
 '''
 一个深度强化学习算法分三个部分实现：
 1.Agent类:包括actor、critic、target_actor、target_critic、actor_optimizer、critic_optimizer、
-2.DQN算法类:包括select_action,learn、test、save、load等方法,为具体的算法细节实现
+2.DQN算法类:包括select_action,learn、save、load等方法,为具体的算法细节实现
 3.main函数:实例化DQN类,主要参数的设置,训练、测试、保存模型等
 '''
-'''  参数修改 改三处 1.MLP的hidden  2.main中args 3.dis_to_con_中的离散转连续空间维度 '''
-
+'''DQN论文链接:https://arxiv.org/pdf/1312.5602'''
+'''  参数修改 改三处 1.MLP的hidden  2.main中args 3.dis_to_con中的离散转连续空间维度 '''
 ## 第一部分：定义Agent类
 class MLP(nn.Module):
     '''
@@ -69,14 +69,19 @@ class DQN:
         输入的obs shape为(obs_dim) np.array reshape => (1,obs_dim) torch.tensor 
         若离散 则输出的action 为标量 <= [0]  (action_dim) np.array <= argmax (1,action_dim) torch.tensor 若keepdim=True则为(1,1) 否则为(1)
         若连续 则输出的action 为(1,action_dim) np.array <= (1,action_dim) torch.tensor
+        is_continue 指定buffer和算法是否是连续动作 表示输出动作是否为连续动作
         '''
         obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
-        if self.is_continue: # dqn 无此项
-            action = self.agent.Qnet(obs).detach().cpu().numpy() # 1xaction_dim
+        if self.is_continue:  # dqn 均取离散动作
+            action = self.agent.Qnet(obs).detach().cpu().numpy().squeeze(0) # 1xaction_dim ->action_dim
         else:
             action = self.agent.Qnet(obs).argmax(dim = 1).detach().cpu().numpy()[0] # []标量
         return action
     
+    def evaluate_action(self, obs):
+        '''DQN的探索策略是ε-greedy, 评估时,在main中去掉ε就行。类似于确定性策略ddpg。'''
+        return self.select_action(obs)
+
     ## buffer相关
     def add(self, obs, action, reward, next_obs, done):
         self.buffer.add(obs, action, reward, next_obs, done)
@@ -92,13 +97,16 @@ class DQN:
 
     ## DQN算法相关
     def learn(self,batch_size, gamma, tau):
+        '''
+        公式: target_Q = rewards + gamma * max_a(Q_target(next_obs, a)) * (1 - dones)
+        '''
         obs, actions, rewards, next_obs, dones = self.sample(batch_size) 
 
         next_target_Q = self.agent.Qnet_target(next_obs).max(dim = 1)[0].reshape(-1, 1) # batch_size x 1
         
         target_Q = rewards + gamma * next_target_Q * (1 - dones) # batch_size x 1
 
-        current_Q = self.agent.Qnet(obs).gather(dim =1, index =actions.long()) # batch_size x 1
+        current_Q = self.agent.Qnet(obs).gather(dim =1, index =actions.long()) # batch_size x action_dim -> batch_size x 1
 
         loss = F.mse_loss(current_Q, target_Q.detach()) # 标量值
         self.agent.update_Qnet(loss)
@@ -119,47 +127,47 @@ class DQN:
         torch.save(self.agent.Qnet.state_dict(), os.path.join(model_dir,"DQN.pt"))
     ## 加载模型
     @staticmethod 
-    def load(dim_info, model_dir):
-        policy = DQN(dim_info,0,0,0,device = torch.device("cpu"))
+    def load(dim_info, is_continue ,model_dir):
+        policy = DQN(dim_info,is_continue,0,0,device = torch.device("cpu"))
         policy.agent.Qnet.load_state_dict(torch.load(os.path.join(model_dir,"DQN.pt")))
         return policy
 
 ### 第三部分：main函数
 ## 环境配置
-def get_env(env_name,dis_to_con_b = False):
+def get_env(env_name,is_dis_to_con = False):
     env = gym.make(env_name)
     if isinstance(env.observation_space, gym.spaces.Box):
         obs_dim = env.observation_space.shape[0]
     else:
-        obs_dim = 1
+        obs_dim = 1 # 例：Taxi-v3 离散状态空间
     if isinstance(env.action_space, gym.spaces.Box): # 是否动作连续环境
         action_dim = env.action_space.shape[0]
         dim_info = [obs_dim,action_dim]
         max_action = env.action_space.high[0]
-        is_continuous = True # 指定buffer和算法是否用于连续动作
-        if dis_to_con_b :
+        is_continue = True # 指定buffer和算法是否是连续动作 即输出动作是否是连续动作
+        if is_dis_to_con :
             if action_dim == 1:
                 dim_info = [obs_dim,16]  # 离散动作空间
                 max_action = None
-                is_continuous = False
-            else: # 多重连续动作空间->多重离散动作空间
+                is_continue = False
+            else: # 多重连续动作空间->多重离散动作空间 例：BipedalWalker-v3
                 dim_info = [obs_dim,2**action_dim]  # 离散动作空间
                 max_action = None
-                is_continuous = False
+                is_continue = False
     else:
         action_dim = env.action_space.n
         dim_info = [obs_dim,action_dim]
         max_action = None
-        is_continuous = False
+        is_continue = False
     
-    return env,dim_info, max_action, is_continuous #dqn中均转为离散域.max_action没用到
+    return env,dim_info, max_action, is_continue #dqn中均转为离散域.max_action没用到
 
 ## make_dir
 def make_dir(env_name,policy_name = 'DQN',trick = None):
     script_dir = os.path.dirname(os.path.abspath(__file__)) # 当前脚本文件夹
     env_dir = os.path.join(script_dir,'./results', env_name)
     os.makedirs(env_dir) if not os.path.exists(env_dir) else None
-    print(trick)
+    print('trick:',trick)
     # 确定前缀
     if trick is None or not any(trick.values()):
         prefix = policy_name + '_'
@@ -169,7 +177,7 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
             if trick[key]:
                 prefix += key + '_'
     # 查找现有的文件夹并确定下一个编号
-    existing_dirs = [d for d in os.listdir(env_dir) if d.startswith(prefix)]
+    existing_dirs = [d for d in os.listdir(env_dir) if d.startswith(prefix) and d[len(prefix):].isdigit()]
     max_number = 0 if not existing_dirs else max([int(d.split('_')[-1]) for d in existing_dirs if d.split('_')[-1].isdigit()])
     model_dir = os.path.join(env_dir, prefix + str(max_number + 1))
     os.makedirs(model_dir)
@@ -198,45 +206,56 @@ FrozenLake-v1 在5000episode下比较好
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="FrozenLake-v1") 
+    parser.add_argument("--env_name", type = str,default="Pendulum-v1") 
     parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
+    parser.add_argument("--save_freq", type=int, default=int(500//4))
     parser.add_argument("--start_steps", type=int, default=500)
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数
     parser.add_argument("--learn_steps_interval", type=int, default=1)
-    parser.add_argument("--dis_to_con_b", type=bool, default=True) # dqn 默认为True
+    parser.add_argument("--is_dis_to_con", type=bool, default=True) # dqn 默认为True
     # 训练参数
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--tau", type=float, default=0.01)
     ## DQN参数
     parser.add_argument("--Qnet_lr", type=float, default=1e-3)
     ## buffer参数   
-    parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
+    parser.add_argument("--buffer_size", type=int, default=int(1e6)) #1e6默认是float,在bufffer中有int强制转换
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
     # DQN独有参数
     parser.add_argument("--epsilon", type=float, default=0.1)
     # trick参数
-    parser.add_argument("--trick", type=dict, default={'Double':False,'Dueling':False,'PER':False,'HER':False,'Noisy':False,'n_step':False})  
-
-    args = parser.parse_args()
+    parser.add_argument("--policy_name", type=str, default='DQN')
+    parser.add_argument("--trick", type=dict, default={'Double':False,'Dueling':False,'PER':False,'Noisy':False,'N_Step':False,'Categorical':False})    
+    # device参数
+    parser.add_argument("--device", type=str, default='cpu')
     
+    args = parser.parse_args()
+    print(args)
+    print('Algorithm:',args.policy_name)
     ## 环境配置
-    env,dim_info,max_action,is_continue = get_env(args.env_name,args.dis_to_con_b)
+    env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)
     max_action = max_action if max_action is not None else args.max_action
     action_dim = dim_info[1]
+    print(f'Env:{args.env_name}  obs_dim:{dim_info[0]}  action_dim:{dim_info[1]}  max_action:{max_action}  max_episodes:{args.max_episodes}')
 
-    ## 随机数种子
+    ## 随机数种子(cpu)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    ### cuda
+    torch.cuda.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print('Random Seed:',args.seed)
 
     ## 保存文件夹
-    model_dir = make_dir(args.env_name,trick=args.trick)
+    model_dir = make_dir(args.env_name,policy_name = args.policy_name ,trick=args.trick)
     writer = SummaryWriter(model_dir)
 
-    ##
-    device = torch.device('cpu')#torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ## device参数
+    device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
     
     ## 算法配置
     policy = DQN(dim_info, is_continue, Qnet_lr = args.Qnet_lr, buffer_size = args.buffer_size,device = device,)
@@ -253,7 +272,7 @@ if __name__ == '__main__':
     while episode_num < args.max_episodes:
         step +=1
 
-        # 获取动作
+        # 获取动作 区分动作action_为环境中的动作 action为要训练的动作
         if step < args.random_steps:
             action = env.action_space.sample()
         else:
@@ -261,13 +280,12 @@ if __name__ == '__main__':
                 action = np.random.randint(action_dim)
             else:
                 action = policy.select_action(obs)   
-        action_ = action
-        if args.dis_to_con_b and isinstance(env.action_space, gym.spaces.Box):
+        if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
             action_ = dis_to_con(action, env, action_dim)
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         done = terminated or truncated
-        done_bool = done if not truncated  else False    ### truncated 为超过最大步数
+        done_bool = terminated     ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward += reward
         obs = next_obs
@@ -277,6 +295,9 @@ if __name__ == '__main__':
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
+            ## 保存
+            if (episode_num + 1) % args.save_freq == 0:
+                policy.save(model_dir)
             writer.add_scalar('reward', episode_reward, episode_num + 1)
             train_return.append(episode_reward)
 
@@ -287,12 +308,15 @@ if __name__ == '__main__':
         # 满足step,更新网络
         if step > args.start_steps and step % args.learn_steps_interval == 0:
             policy.learn(args.batch_size, args.gamma, args.tau)
+        
+        if episode_num % args.save_freq == 0:
+            policy.save(model_dir)
 
     
     print('total_time:',time.time()-time_)
     policy.save(model_dir)
     ## 保存数据
-    np.save(os.path.join(model_dir,f"DQN_seed_{args.seed}.npy"),np.array(train_return))
+    np.save(os.path.join(model_dir,f"{args.policy_name}_seed_{args.seed}.npy"),np.array(train_return))
 
 
 
