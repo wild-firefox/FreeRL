@@ -6,6 +6,8 @@
 * [maddpg-pettingzoo-pytorch](https://github.com/Git-123-Hub/maddpg-pettingzoo-pytorch)
 * [深度强化学习](https://github.com/DeepRLChinese/DeepRL-Chinese/blob/master/04_dqn.py)
 * [reinforcement-learning-algorithm](https://github.com/Git-123-Hub/reinforcement-learning-algorithm)
+* [DRL-Pytorch](https://github.com/XinJingHao/DRL-Pytorch/)
+* [cleanRL](https://github.com/vwxyzjn/cleanrl)
 
 目的是写出像TD3作者那样简单易懂的DRL代码,  
 由于参考了ElegentRL和Easy的库,from easy to elegent 故起名为freeRL,
@@ -21,6 +23,19 @@ pygame 0.25.2 # 这个版本和gymnasium[all]0.29.1兼容
 ## 效果
 用DQN算法在LunarLander-v2环境下训练500个轮次的3个seed的效果：线为均值，阴影为方差
 ![alt text](DQN_file/learning_curves/LunarLander-v2/DQN.png)
-用 seed = 0 时训练的模型评估
+用 seed = 0 训练的模型评估,评估100个不同的seed的结果
 ![alt text](DQN_file/results/LunarLander-v2/DQN_1/evaluate.png)
+随机选择其中一个seed的结果，渲染环境
 ![alt text](DQN_file/results/LunarLander-v2/DQN_1/evaluate.gif)
+
+## 已实现
+* DQN 1.DQN 
+2.DQN_Double
+3.DQN_Dueling
+4.DQN_PER
+5.DQN_Noisy
+6.DQN_N_Step
+7.DQN_Categorical
+8.DQN_Rainbow
+
+![alt text](image.png)
