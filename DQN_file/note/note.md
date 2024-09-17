@@ -1,3 +1,7 @@
+# 环境
+使用离散环境MountainCar-v0为基准来调整参数，以此能收敛为目标了，后发现此参数可以适用大多数其他环境，但不是全部。
+使用MountainCar-v0的理由：环境的目标是到达最高的山峰，但环境中还有个次高的山峰，个人认为可以很好拟合出梯度中的次优解。
+
 ## 1 PER note
 在 MountainCar-v0 环境下测试了一下 无PER 和有PER  
 DQN_2 ,DQN_3 为seed10 seed100   
@@ -39,12 +43,16 @@ https://github.com/deligentfool/dqn_zoo/blob/master/Categorical%20DQN/categorica
 问题1 ：出现了增加了一个算法，时间却反而减少的现象，这里c51算法叠加PER算法后，时间反而比单PER减少了，猜测：可能c51算法拟合的q分布天生和error分布契合，导致优势值的更新时间减少。  
 ![alt text](image-2.png)
   
-结论：
+结论：  
 1.在有些环境下单纯累加trick 并不奏效 如MountainCar-v0,需要根据环境特点来选择。  
 2.或者说,有些算法的鲁棒性不是很好。  
   
-测试发现：
-Double,Dueling,具有鲁棒性
-N-step Categorical,不具有鲁棒性
-Categorical ,PER有良好的叠加性：猜测：原因是两者都适用于奖励稀疏型环境。
-待续
+测试发现：  
+1.Double,Dueling,具有鲁棒性：加入后并不会造成算法不收敛。
+2.N-step,Categorical,不具有鲁棒性：加入后容易造成算法不收敛。  
+3.Noisy,对超参数敏感或者说是环境敏感，调整到好的超参数会有很好的效果，反之亦然。  
+4.PER 单独加入会使训练速度变慢，但是效果并没有增加多少，同时有较多参数需要调整。
+4.Categorical ,PER有良好的叠加性：猜测：原因是两者都适用于奖励稀疏型环境。而单独加入PER算法，
+
+补充：rainbow在其他环境，如：LunarLander-v2 效果还是挺好的。(简单环境CartPole-v1下的环境也很好)  
+![alt text](image-3.png)
