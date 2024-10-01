@@ -1,4 +1,4 @@
-# 环境
+## 环境
 使用离散环境MountainCar-v0为基准来调整参数，以此能收敛为目标了，后发现此参数可以适用大多数其他环境，但不是全部。
 使用MountainCar-v0的理由：环境的目标是到达最高的山峰，但环境中还有个次高的山峰，个人认为可以很好拟合出梯度中的次优解。
 
@@ -34,7 +34,8 @@ https://github.com/deligentfool/dqn_zoo/blob/master/Categorical%20DQN/categorica
 
 效果如下：蓝色为原始参考代码 绿色改1 黑色改1,2
 ![alt text](image-1.png)
-
+后面参考的这个代码是对的  
+https://github.com/XinJingHao/DRL-Pytorch/
 ## 3 Noisy note
 原始论文 std_init = 0.5  
 但是对于有些环境不是很有效 比如 MountainCar-v0 好像设置0.1,0.2左右会比较好 在MountainCar-v0环境中 设置的为0.05，才能收敛。

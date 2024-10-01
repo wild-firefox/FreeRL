@@ -23,7 +23,9 @@ from torch.utils.tensorboard import SummaryWriter
 2.DQN算法类:包括select_action,learn、save、load等方法,为具体的算法细节实现
 3.main函数:实例化DQN类,主要参数的设置,训练、测试、保存模型等
 '''
-'''DQN论文链接:https://arxiv.org/pdf/1312.5602'''
+'''DQN论文链接:https://arxiv.org/pdf/1312.5602
+
+'''
 '''  参数修改 改三处 1.MLP的hidden  2.main中args 3.dis_to_con中的离散转连续空间维度 '''
 ## 第一部分：定义Agent类
 class MLP(nn.Module):
@@ -102,9 +104,9 @@ class DQN:
         '''
         obs, actions, rewards, next_obs, dones = self.sample(batch_size) 
 
-        next_target_Q = self.agent.Qnet_target(next_obs).max(dim = 1)[0].reshape(-1, 1) # batch_size x 1
+        next_Q_target = self.agent.Qnet_target(next_obs).max(dim = 1)[0].reshape(-1, 1) # batch_size x 1
         
-        target_Q = rewards + gamma * next_target_Q * (1 - dones) # batch_size x 1
+        target_Q = rewards + gamma * next_Q_target * (1 - dones) # batch_size x 1
 
         current_Q = self.agent.Qnet(obs).gather(dim =1, index =actions.long()) # batch_size x action_dim -> batch_size x 1
 
@@ -213,7 +215,7 @@ if __name__ == '__main__':
     parser.add_argument("--max_episodes", type=int, default=int(500))
     parser.add_argument("--save_freq", type=int, default=int(500//4))
     parser.add_argument("--start_steps", type=int, default=500)
-    parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数
+    parser.add_argument("--random_steps", type=int, default=0)  #可选择是否使用 dqn论文无此参数
     parser.add_argument("--learn_steps_interval", type=int, default=1)
     parser.add_argument("--is_dis_to_con", type=bool, default=True) # dqn 默认为True
     # 训练参数
@@ -268,7 +270,8 @@ if __name__ == '__main__':
     step = 0
     episode_reward = 0
     train_return = []
-    obs,info = env.reset(seed=args.seed)
+    obs,info = env.reset(seed=args.seed)  # 针对obs复现
+    env.action_space.seed(seed=args.seed) if args.random_steps > 0 else None # 针对action复现:env.action_space.sample()
     while episode_num < args.max_episodes:
         step +=1
 
@@ -280,7 +283,8 @@ if __name__ == '__main__':
                 action = np.random.randint(action_dim)
             else:
                 action = policy.select_action(obs)   
-        if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
+        action_ = action
+        if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box): #如果环境连续，且算法（用于离散）使用离散转连续域技巧
             action_ = dis_to_con(action, env, action_dim)
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
@@ -289,7 +293,6 @@ if __name__ == '__main__':
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward += reward
         obs = next_obs
-        
         # episode 结束
         if done:
             ## 显示
@@ -309,6 +312,7 @@ if __name__ == '__main__':
         if step > args.start_steps and step % args.learn_steps_interval == 0:
             policy.learn(args.batch_size, args.gamma, args.tau)
         
+        # 保存模型
         if episode_num % args.save_freq == 0:
             policy.save(model_dir)
 

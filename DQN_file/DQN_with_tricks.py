@@ -28,7 +28,7 @@ from torch.utils.tensorboard import SummaryWriter
 rainbow-dqn : trick 1-6                                                链接: https://arxiv.org/abs/1710.02298 
 tricks实现:
 1.Double DQN:将Q值的选择和评估分开，减少Q值的高估                        链接: https://arxiv.org/abs/1509.06461
-2.Dueling DQN:将Q值分解为状态值V和优势值A，学习更好的Q值                 链接: https://arxiv.org/abs/1509.06461
+2.Dueling DQN:将Q值分解为状态值V和优势值A，学习更好的Q值                 链接: https://arxiv.org/abs/1511.06581
 3.Prioritized Experience Replay:优先级经验回放，根据TD误差来更新优先级   链接: https://arxiv.org/abs/1511.05952
 4.Noise DQN:添加噪声，增强探索能力，提高鲁棒性                          链接: https://arxiv.org/abs/1706.10295
 5.N-step:将Q值计算到未来N步，提供更准确的状态价值估计，更快收敛          链接: https://arxiv.org/abs/1901.07510
@@ -259,14 +259,14 @@ class DQN:
             '''  非分布型 Q网络 '''
             if self.trick['Double']: # 使用当前网络选择动作，使用目标网络评估Q值
                 next_actions = self.agent.Qnet(next_obs).argmax(dim = 1).reshape(-1, 1) # batch_size x 1
-                next_target_Q = self.agent.Qnet_target(next_obs).gather(dim = 1, index = next_actions.long()) # batch_size x 1
+                next_Q_target = self.agent.Qnet_target(next_obs).gather(dim = 1, index = next_actions.long()) # batch_size x 1
             else:
-                next_target_Q = self.agent.Qnet_target(next_obs).max(dim = 1)[0].reshape(-1, 1) # batch_size x 1
+                next_Q_target = self.agent.Qnet_target(next_obs).max(dim = 1)[0].reshape(-1, 1) # batch_size x 1
             
             if self.trick['N_Step']:
-                target_Q = rewards + self.buffer.n_step_gamma * next_target_Q * (1 - dones) # batch_size x 1
+                target_Q = rewards + self.buffer.n_step_gamma * next_Q_target * (1 - dones) # batch_size x 1
             else:
-                target_Q = rewards + gamma * next_target_Q * (1 - dones) # batch_size x 1
+                target_Q = rewards + gamma * next_Q_target * (1 - dones) # batch_size x 1
 
             current_Q = self.agent.Qnet(obs).gather(dim =1, index =actions.long()) # batch_size x 1
 
@@ -380,14 +380,14 @@ FrozenLake-v1 在5000episode下比较好
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="LunarLander-v2") 
+    parser.add_argument("--env_name", type = str,default="CartPole-v1") 
     parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
     parser.add_argument("--start_steps", type=int, default=500)
     parser.add_argument("--save_freq", type=int, default=int(500//4))
-    parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数
+    parser.add_argument("--random_steps", type=int, default=0)  #可选择是否使用 dqn论文无此参数
     parser.add_argument("--learn_steps_interval", type=int, default=1)
     parser.add_argument("--is_dis_to_con", type=bool, default=True) # dqn 默认为True
     # 训练参数
@@ -404,7 +404,7 @@ if __name__ == '__main__':
     parser.add_argument("--policy_name", type=str, default='DQN')                                
     parser.add_argument("--trick", type=dict, default={'Double':True,'Dueling':True,'PER':True,'Noisy':True,'N_Step':True,'Categorical':True})  
     # device参数
-    parser.add_argument("--device", type=str, default='cuda') ############??cuda #124
+    parser.add_argument("--device", type=str, default='cpu') # cuda/cpu
 
     args = parser.parse_args()
     
@@ -444,6 +444,7 @@ if __name__ == '__main__':
     episode_reward = 0
     train_return = []
     obs,info = env.reset(seed=args.seed)
+    env.action_space.seed(seed=args.seed) if args.random_steps > 0 else None # 针对action复现:env.action_space.sample()
     while episode_num < args.max_episodes:
         step +=1
 
@@ -458,6 +459,7 @@ if __name__ == '__main__':
                     action = np.random.randint(action_dim)
                 else:
                     action = policy.select_action(obs)   
+        action_ = action
         if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
             action_ = dis_to_con(action, env, action_dim)
         # 探索环境
