@@ -10,8 +10,10 @@
 * [cleanRL](https://github.com/vwxyzjn/cleanrl)
 
 目的是写出像TD3作者那样简单易懂的DRL代码,  
-由于参考了ElegentRL和Easy的库,from easy to elegent 故起名为freeRL,
-free也是希望写出的代码可以随意的,自由的从此代码移植到自己的代码上。
+由于参考了ElegentRL和Easy的库,from easy to elegent 故起名为freeRL,  
+free也是希望写出的代码可以随意的,自由的从此代码移植到自己的代码上。  
+库的介绍：[【FreeRL】我的深度学习库构建思想](https://blog.csdn.net/weixin_56760882/article/details/142176797)
+
 
 ## python环境
 ```python
@@ -28,6 +30,15 @@ pygame 0.25.2 # 这个版本和gymnasium[all]0.29.1兼容
 随机选择其中一个seed的结果，渲染环境
 ![alt text](DQN_file/results/LunarLander-v2/DQN_1/evaluate.gif)
 
+## 显示训练
+训练时，使用tensorboard来显示实时的学习曲率。
+
+在DQN_file（算法）文件夹下，D:FreeRL/DQN_file 终端里输入：
+tensorboard --logdir=results/env_name
+在跳出的http://localhost:6008/ 按住ctrl点击进入就行。
+
+tensorboard保存的文件events.out.tfevents.和模型的位置一致。
+
 ## 已实现
 * DQN 1.DQN 
 2.DQN_Double
@@ -39,3 +50,5 @@ pygame 0.25.2 # 这个版本和gymnasium[all]0.29.1兼容
 8.DQN_Rainbow
 
 ![alt text](image.png)
+
+* DDPG
