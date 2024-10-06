@@ -49,7 +49,7 @@ def render(env_name,policy,action_dim,is_dis_to_con,model_dir):
     while not done:
         frame = env.render()
         frames.append(frame)
-        action = policy.select_action(obs)
+        action = policy.evaluate_action(obs)
         action_ = action
         if is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
             action_ = dis_to_con(action, env, action_dim)
@@ -86,11 +86,6 @@ if __name__ == "__main__":
     max_action = max_action if max_action is not None else args.max_action
     action_dim = dim_info[1]
     print(f'Env:{args.env_name}  obs_dim:{dim_info[0]}  action_dim:{dim_info[1]}  max_action:{max_action}  max_episodes:{args.max_episodes}')
-    # 模型文件夹 - 读取
-    results_dir =  args.results_dir if args.results_dir else os.path.join(os.path.dirname(os.path.abspath(__file__)),'./results')
-    model_dir = os.path.join(results_dir, args.env_name,args.folder_name) 
-
-    policy = DQN.load(dim_info,is_continue = is_continue ,model_dir=model_dir,trick = args.trick)
     
     ## 随机数种子(cpu)
     np.random.seed(args.seed)
@@ -101,6 +96,13 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = False
     print('Random Seed:',args.seed)
 
+    # 模型文件夹 - 读取
+    results_dir =  args.results_dir if args.results_dir else os.path.join(os.path.dirname(os.path.abspath(__file__)),'./results')
+    model_dir = os.path.join(results_dir, args.env_name,args.folder_name) 
+    print(f'model_dir: {model_dir}')
+
+    policy = DQN.load(dim_info,is_continue = is_continue ,model_dir=model_dir,trick = args.trick)
+
     # 以不同seed评估100次
     evaluate_return = []
     for e in range(args.max_episodes):
@@ -108,10 +110,8 @@ if __name__ == "__main__":
         episode_reward = 0
         done = False
         while not done:
-            if is_continue:
-                action = np.clip(policy.select_action(obs) * max_action,-max_action,max_action)
-            else:  # dqn 默认离散域
-                action = policy.evaluate_action(obs)
+            action = policy.evaluate_action(obs)
+            action_ = action
             if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box):
                 action_ = dis_to_con(action, env, action_dim)  
             next_obs, reward,terminated, truncated, infos = env.step(action_) 

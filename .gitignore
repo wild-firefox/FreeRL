@@ -1,5 +1,7 @@
 /.vscode
 /Actor-Critic_file
-/MAAC_file
+/MAAC_file/__pycache__
 /study.ipynb
 /test.py
+/DQN_file/__pycache__
+/MADDPG_file/__pycache__

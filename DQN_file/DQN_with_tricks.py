@@ -427,6 +427,7 @@ if __name__ == '__main__':
 
     ## 保存文件夹
     model_dir = make_dir(args.env_name,policy_name = args.policy_name ,trick = args.trick)
+    print(f'model_dir: {model_dir}')
     writer = SummaryWriter(model_dir)
 
     ## device参数

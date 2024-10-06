@@ -66,7 +66,7 @@ def plot_compare_learning_curves(rewards,title,labels,colors ,window_size=20):
     plt.savefig(os.path.join(learning_curves_env_dir, f"compare_{rewards.shape[0]}.png"))
 
 ''' 
-环境见：CartPole-v1,Pendulum-v1,MountainCar-v0;LunarLander-v2,BipedalWalker-v3;FrozenLake-v1 
+环境见：CartPole-v1,Pendulum-v1,MountainCar-v0,MountainCarContinuous-v0;LunarLander-v2,BipedalWalker-v3;FrozenLake-v1
 https://github.com/openai/gym/blob/master/gym/envs/__init__.py
 FrozenLake-v1 在5000episode下比较好
 '''
@@ -75,7 +75,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env_name", type=str, default="MountainCar-v0") # /results/env_name
     parser.add_argument("--results_dir", type=str, default="./DQN_file/results/") # None (其他算法下直接填None) /results
-    parser.add_argument("--learning_curves", type=str, default="./DQN_file/learning_curves/") # None
+    parser.add_argument("--learning_curves", type=str, default="./DQN_file/learning_curves/") # None /learning_curves
     parser.add_argument("--seed_num", type=int, default=3) #评估的随机种子数
     ## 注意：是否比较其他算法
     parser.add_argument("--is_compare", type=str, default=True) # 多个算法比较
@@ -97,12 +97,14 @@ if __name__ == "__main__":
     # 读取文件夹名: 算法 + trick 
     policy_trick = policy_trick_name(args.policy_name, args.trick)
 
-    '''
+    '''读取rewards
+    # 第一版读取：文件夹名和seed数可以根据自己的实际情况修改
     # reward_1 = np.load(os.path.join(results_env_dir, f"{policy_trick}_1", f"{args.policy_name}_seed_0.npy")) 
     # reward_2 = np.load(os.path.join(results_env_dir, f"{policy_trick}_2", f"{args.policy_name}_seed_10.npy"))
     # reward_3 = np.load(os.path.join(results_env_dir, f"{policy_trick}_3", f"{args.policy_name}_seed_100.npy"))
     # rewards = np.array([reward_1, reward_2, reward_3]) # ->(3,episodes)
-    # 读取rewards 现 :改成如下可以不以seed 0 10 100的顺序读取
+
+    第二版本如下所示: 以较少的行数表示，缺点:f"{policy_trick}_{i+1}" 只能按顺序执行。
     '''
     
     rewards = []
