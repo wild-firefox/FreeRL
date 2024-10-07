@@ -71,17 +71,133 @@ class Critic(nn.Module):
         q = self.l3(q)
 
         return q
+'''
+popart实现： Preserving Outputs Precisely, while Adaptively Rescaling Targets 链接:https://arxiv.org/pdf/1602.07714
+1.初始化W(权重) = I , b(偏差) = 0, sigma(标准差) = 1 ,u(均值,代码写作mu) = 0
+2.Use Y to compute new scale sigma_new and new shift mu_new 相当于滑动式更新均值和标准差
+3.W = W * sigma_new / sigma b = (sigma * b + mu - mu_new) / sigma_new ; sigma = sigma_new , mu = mu_new 
+4.更新拟合函数theta
+5.用梯度下降更新W，b的参数
+
+论文中参数
+beta = 10. ** (-0.5)
+lr   = 10. ** (-2.5)
+nu    未明确(论文中的符号为vt) 但是说明 vt - µ^2 is positive
+
+论文中使用SGD 这里改用Adam
+参考：
+1.https://github.com/zouyu4524/Pop-Art-Translation/blob/pytorch/discard/Pop_Art.py # 这里参数设置 nu = self.sigma**2 + self.mu**2
+2.https://github.com/Elainewyxx/DDPG_PopArt/blob/master/DDPG.py # 未完成的实现
+3.https://github.com/openai/baselines/blob/master/baselines/ddpg/ddpg_learner.py#L205 # tf实现
+4.https://github.com/marlbenchmark/on-policy/blob/de66d7a4b23fac2513f56f96f73b3f5cb96695ac/onpolicy/algorithms/utils/popart.py # 这里参数设置nu = 0  beta= 0.99999
+'''
+class UpperLayer(nn.Module):
+    def __init__(self, H, n_out):
+        super(UpperLayer, self).__init__()
+        self.output_linear = nn.Linear(H, n_out)
+        '''1.初始化W(权重) = I , b(偏差) = 0, sigma(标准差) = 1 ,u(均值,代码写作mu) = 0'''
+        nn.init.ones_(self.output_linear.weight) # W = I
+        nn.init.zeros_(self.output_linear.bias) # b = 0
+
+    def forward(self, x):
+        return self.output_linear(x)  
+
+class PopArt:
+    def __init__(self, mode, LowerLayers, LowerLayers_target,H, n_out, critic_lr):
+        super(PopArt, self).__init__()
+        self.mode = mode.upper() # 大写
+        assert self.mode in ['ART', 'POPART'], "Please select mode from  'Art' or 'PopArt'."
+        self.lower_layers = LowerLayers
+        self.lower_layers_target = LowerLayers_target
+        self.upper_layer  = UpperLayer(H, n_out).to(device)
+        self.sigma = torch.tensor(1., dtype=torch.float)  # consider scalar first
+        self.sigma_new = None
+        self.mu = torch.tensor(0., dtype=torch.float)
+        self.mu_new = None
+        self.nu = self.sigma**2 + self.mu**2 # second-order moment 二阶矩 用于计算方差
+        self.beta = 0.99999#10. ** (-0.5) 
+        self.lr = 1e-3 #10. ** (-2.5)  
+        self.loss_func = torch.nn.MSELoss()
+        self.loss = None
+
+        self.opt_upper = torch.optim.Adam(self.upper_layer.parameters(), lr = self.lr)
+        self.opt_lower = torch.optim.Adam(self.lower_layers.parameters(), lr = critic_lr)
+
+
+    def art(self, y):
+        '''2.Use Y to compute new scale sigma_new and new shift mu_new 相当于滑动式更新均值和标准差'''
+        self.mu_new = (1. - self.beta) * self.mu + self.beta * y.mean()
+        self.nu = (1. - self.beta) * self.nu + self.beta * (y**2).mean()
+        self.sigma_new = torch.sqrt(self.nu - self.mu_new**2)
+        
+
+    def pop(self):
+        '''3.W = W * sigma_new / sigma b = (sigma * b + mu - mu_new) / sigma_new ; sigma = sigma_new , mu = mu_new '''
+        relative_sigma = (self.sigma / self.sigma_new)
+        self.upper_layer.output_linear.weight.data.mul_(relative_sigma)
+        self.upper_layer.output_linear.bias.data.mul_(relative_sigma).add_((self.mu-self.mu_new)/self.sigma_new)
+
+    def update_stats(self):
+        # update statistics
+        if self.sigma_new is not None:
+            self.sigma = self.sigma_new
+        if self.mu_new is not None:
+            self.mu = self.mu_new
+
+    def normalize(self, y):
+        return (y - self.mu) / self.sigma
+
+    def denormalize(self, y):
+        return self.sigma * y + self.mu
+
+    def backward(self):
+        '''4.更新拟合函数theta
+        5.用梯度下降更新W，b的参数
+        '''
+        self.opt_lower.zero_grad()
+        self.opt_upper.zero_grad()
+        self.loss.backward()
+
+    def step(self):
+        torch.nn.utils.clip_grad_norm_(self.lower_layers.parameters(), 0.5)
+        self.opt_lower.step()
+        torch.nn.utils.clip_grad_norm_(self.upper_layer.parameters(), 0.5)
+        self.opt_upper.step()
+        
+
+
+    def forward(self, o,a, y):
+        if self.mode in ['POPART', 'ART']:
+            self.art(y)
+        if self.mode in ['POPART']:
+            self.pop()
+        self.update_stats()
+        y_pred = self.upper_layer(self.lower_layers(o,a))
+        self.loss = self.loss_func(y_pred, self.normalize(y))
+        self.backward()
+        self.step()
+
+        return self.loss , self.lower_layers 
+
+    def output(self, x, u):
+        return self.upper_layer(self.lower_layers(x, u))
     
+    def output_target(self, x, u):
+        return self.upper_layer(self.lower_layers_target(x, u))
+        
 class Agent:
-    def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, device, ):   
+    def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, device, trick ):   
         self.actor = Actor(obs_dim, action_dim,).to(device)
         self.critic = Critic( dim_info ).to(device)
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
-
+        
         self.actor_target = deepcopy(self.actor)
         self.critic_target = deepcopy(self.critic)
+        if trick['popart']: 
+            self.critic_PopArt = PopArt('POPART', self.critic,self.critic_target, 1, 1, critic_lr=critic_lr)
+        else:
+            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
 
     def update_actor(self, loss):
         self.actor_optimizer.zero_grad()
@@ -100,7 +216,7 @@ class DDPG:
     def __init__(self, dim_info, is_continue, actor_lr, critic_lr, buffer_size, device, trick = None):
 
         obs_dim, action_dim = dim_info
-        self.agent = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, device)
+        self.agent = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, device , trick)
         self.buffer = Buffer(buffer_size, obs_dim, act_dim = action_dim if is_continue else 1, device = device) #Buffer中说明了act_dim和action_dim的区别
         self.device = device
         self.is_continue = is_continue
@@ -139,17 +255,26 @@ class DDPG:
         
         '''类似于使用了Double的技巧 + target网络技巧'''
         next_action = self.agent.actor_target(next_obs)
-        next_Q_target = self.agent.critic_target(next_obs, next_action) # batch_size x 1
+        if self.trick['popart']:
+            next_Q_target =   self.agent.critic_PopArt.denormalize(self.agent.critic_PopArt.output_target(next_obs, next_action))
+        else:
+            next_Q_target = self.agent.critic_target(next_obs, next_action) # batch_size x 1
         
         ## 先更新critic
         target_Q = rewards + gamma * next_Q_target * (1 - dones) # batch_size x 1
-        current_Q = self.agent.critic(obs ,actions)# batch_size x 1
-        critic_loss = F.mse_loss(current_Q, target_Q.detach()) # 标量值
-        self.agent.update_critic(critic_loss)
+        if self.trick['popart']:
+            self.agent.critic_PopArt.forward(obs, actions,target_Q.detach())
+        else:
+            current_Q = self.agent.critic(obs ,actions)# batch_size x 1
+            critic_loss = F.mse_loss(current_Q, target_Q.detach()) # 标量值
+            self.agent.update_critic(critic_loss)
 
         ## 再更新actor
         new_action = self.agent.actor(obs)
-        actor_loss = -self.agent.critic(obs, new_action).mean()
+        if self.trick['popart']:
+            actor_loss = -self.agent.critic_PopArt.denormalize(self.agent.critic_PopArt.output(obs, new_action)).mean()
+        else:
+            actor_loss = -self.agent.critic(obs, new_action).mean()
         self.agent.update_actor(actor_loss)
 
         self.update_target(tau)
@@ -236,7 +361,7 @@ https://github.com/openai/gym/blob/master/gym/envs/__init__.py
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="Pendulum-v1") 
+    parser.add_argument("--env_name", type = str,default="MountainCarContinuous-v0") 
     parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
@@ -254,7 +379,7 @@ if __name__ == '__main__':
     parser.add_argument("--critic_lr", type=float, default=1e-3)
     ## buffer参数   
     parser.add_argument("--buffer_size", type=int, default=int(1e6)) #1e6默认是float,在bufffer中有int强制转换
-    parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小 # 256 (64 for MountainCarContinuous-v0)
+    parser.add_argument("--batch_size", type=int, default=64)  #保证比start_steps小 # 256 (64 for MountainCarContinuous-v0)
     # DDPG 独有参数 noise
     ## gauss noise
     parser.add_argument("--gauss_sigma", type=float, default=1) # 高斯标准差 # 0.1 (1 for MountainCarContinuous-v0 )
@@ -263,9 +388,9 @@ if __name__ == '__main__':
     parser.add_argument("--gauss_final_scale", type=float, default=0.0)
     # trick参数
     parser.add_argument("--policy_name", type=str, default='DDPG_simple')
-    parser.add_argument("--trick", type=dict, default=None) 
+    parser.add_argument("--trick", type=dict, default={'popart':True}) 
     # device参数
-    parser.add_argument("--device", type=str, default='cuda') # cpu/cuda
+    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     
     args = parser.parse_args()
     print(args)
