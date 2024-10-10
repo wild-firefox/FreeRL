@@ -15,6 +15,7 @@ import gymnasium as gym
 import argparse
 
 ## 其他
+import re
 import time
 from torch.utils.tensorboard import SummaryWriter
 '''
@@ -53,8 +54,8 @@ class MLP(nn.Module):
         self.trick = trick
 
     def forward(self, obs):
-        a = F.relu(self.l1(obs))
-        return self.l2(a)
+        x = F.relu(self.l1(obs))
+        return self.l2(x)
 
 class Dueling(nn.Module):
     '''
@@ -351,7 +352,8 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
             if trick[key]:
                 prefix += key + '_'
     # 查找现有的文件夹并确定下一个编号
-    existing_dirs = [d for d in os.listdir(env_dir) if d.startswith(prefix) and d[len(prefix):].isdigit()]
+    pattern = re.compile(f'^{prefix}\d+') # ^ 表示开头，\d 表示数字，+表示至少一个
+    existing_dirs = [d for d in os.listdir(env_dir) if pattern.match(d)]
     max_number = 0 if not existing_dirs else max([int(d.split('_')[-1]) for d in existing_dirs if d.split('_')[-1].isdigit()])
     model_dir = os.path.join(env_dir, prefix + str(max_number + 1))
     os.makedirs(model_dir)

@@ -14,19 +14,24 @@ import gymnasium as gym
 import argparse
 
 ## 其他
+import re
 import time
 from torch.utils.tensorboard import SummaryWriter
+
+'''由于grad_clip可以减少梯度消失的发生,算法默认加上'''
 
 '''与simple区别 加入了原论文的补充
 参考1:https://github.com/songrotek/DDPG
 参考2:https://github.com/shariqiqbal2810/maddpg-pytorch/
 '''
+
 '''ddpg ：Deep DPG
 论文：CONTINUOUS CONTROL WITH DEEP REINFORCEMENT LEARNING  链接：https://arxiv.org/pdf/1509.02971
 创新点（特点，与DQN的区别）：
 1.提出一种a model-free, off-policy actor-critic 算法 ，并证实了即使使用原始像素的obs,也能使用continue action spaces 稳健解决各种问题。
 2.不需要更改环境的情况下，可以进行稳定的学习。
 3.比DQN需要更少的经验步就可以收敛。
+
 可借鉴参数：
 hidden：400 -300
 actor_lr = 1e-4
@@ -35,6 +40,7 @@ buffer_size = 1e6
 gamma = 0.99
 tau = 0.001
 std = 0.2 #高斯标准差
+
 细节补充：
 1.weight_decay:对Q使用了正则项l2进行1e-2来权重衰减
 2.OUNoise:使用时间相关噪声来进行探索used an Ornstein-Uhlenbeck process theta=0.15 std=0.2
@@ -42,6 +48,7 @@ std = 0.2 #高斯标准差
 4.net_init:对于低维环境 对actor和critic的全连接层的最后一层使用uniform distribution[-3e-3,3e-3],其余层为[-1/sqrt(f),1/sqrt(f)],f为输入的维度
 对于pixel case  最后一层[-3e-4,3e-4](这里论文笔误写成[3e-4,3e-4])，其余层[-1/sqrt(f),1/sqrt(f)]
 '''
+
 
 ## 第一部分：定义Agent类
 '''
@@ -75,8 +82,8 @@ class Actor(nn.Module):
             else:
                 final_net_init(self.l3, low=-3e-3, high=3e-3)
 
-    def forward(self, x):
-        x = F.relu(self.l1(x))
+    def forward(self, obs):
+        x = F.relu(self.l1(obs))
         x = F.relu(self.l2(x))
         x = F.tanh(self.l3(x))
 
@@ -282,7 +289,8 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
             if trick[key]:
                 prefix += key + '_'
     # 查找现有的文件夹并确定下一个编号
-    existing_dirs = [d for d in os.listdir(env_dir) if d.startswith(prefix) and d[len(prefix):].isdigit()]
+    pattern = re.compile(f'^{prefix}\d+') # ^ 表示开头，\d 表示数字，+表示至少一个
+    existing_dirs = [d for d in os.listdir(env_dir) if pattern.match(d)]
     max_number = 0 if not existing_dirs else max([int(d.split('_')[-1]) for d in existing_dirs if d.split('_')[-1].isdigit()])
     model_dir = os.path.join(env_dir, prefix + str(max_number + 1))
     os.makedirs(model_dir)
