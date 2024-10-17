@@ -319,11 +319,9 @@ def get_env(env_name,is_dis_to_con = False):
         if is_dis_to_con :
             if action_dim == 1:
                 dim_info = [obs_dim,16]  # 离散动作空间
-                max_action = None
                 is_continuous = False
             else: # 多重连续动作空间->多重离散动作空间
                 dim_info = [obs_dim,2**action_dim]  # 离散动作空间
-                max_action = None
                 is_continuous = False
     else:
         action_dim = env.action_space.n
@@ -364,7 +362,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="MountainCarContinuous-v0") 
-    parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
@@ -400,7 +397,6 @@ if __name__ == '__main__':
     
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)
-    max_action = max_action if max_action is not None else args.max_action
     action_dim = dim_info[1]
     print(f'Env:{args.env_name}  obs_dim:{dim_info[0]}  action_dim:{dim_info[1]}  max_action:{max_action}  max_episodes:{args.max_episodes}')
 

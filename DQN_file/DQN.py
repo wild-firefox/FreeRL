@@ -76,7 +76,9 @@ class DQN:
         '''
         obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
         if self.is_continue:  # dqn 均取离散动作
-            action = self.agent.Qnet(obs).detach().cpu().numpy().squeeze(0) # 1xaction_dim ->action_dim
+            print('DQN不适用于连续空间环境，请使用dis_to_cont方法')
+            print('DQN is not suitable for continuous space environment, please use dis_to_cont method')
+            #action = self.agent.Qnet(obs).detach().cpu().numpy().squeeze(0) # 1xaction_dim ->action_dim
         else:
             action = self.agent.Qnet(obs).argmax(dim = 1).detach().cpu().numpy()[0] # []标量
         return action
@@ -130,8 +132,8 @@ class DQN:
         torch.save(self.agent.Qnet.state_dict(), os.path.join(model_dir,"DQN.pt"))
     ## 加载模型
     @staticmethod 
-    def load(dim_info, is_continue ,model_dir):
-        policy = DQN(dim_info,is_continue,0,0,device = torch.device("cpu"))
+    def load(dim_info, is_continue ,model_dir, trick = None):
+        policy = DQN(dim_info,is_continue,0,0,device = torch.device("cpu"),trick = trick)
         policy.agent.Qnet.load_state_dict(torch.load(os.path.join(model_dir,"DQN.pt")))
         return policy
 
@@ -151,11 +153,13 @@ def get_env(env_name,is_dis_to_con = False):
         if is_dis_to_con :
             if action_dim == 1:
                 dim_info = [obs_dim,16]  # 离散动作空间
-                max_action = None
                 is_continue = False
-            else: # 多重连续动作空间->多重离散动作空间 例：BipedalWalker-v3
-                dim_info = [obs_dim,2**action_dim]  # 离散动作空间
-                max_action = None
+            else: # 多重连续动作空间->多重离散动作空间 例：BipedalWalker-v3 连续动作空间4维
+                '''
+                2**action_dim ->将每个维度分成2个离散动作 这个2这个系数可以调节。
+                例:BipedalWalker-v3 4维分成了离散的16维 这个环境下3,4会造成维度爆炸，效果不太好。
+                '''
+                dim_info = [obs_dim,2**action_dim]  # 离散动作空间 
                 is_continue = False
     else:
         action_dim = env.action_space.n
@@ -189,29 +193,41 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
 
 ## dis_to_cont
 def dis_to_con(discrete_action, env, action_dim):  # 离散动作转连续的函数
-    if env.action_space.shape[0] == 1:
+    if env.action_space.shape[0] == 1: # 连续动作空间是一维
         action_lowbound = env.action_space.low[0]  # 连续动作的最小值
         action_upbound = env.action_space.high[0]  # 连续动作的最大值
         return np.array([action_lowbound + (discrete_action /(action_dim - 1)) * (action_upbound -action_lowbound)])
-    else:
+    else: # 连续动作空间是多维
         action_lowbound = env.action_space.low
         action_upbound = env.action_space.high
-        action_dim_per = int(action_dim ** (1 / len(action_lowbound)))
+        action_dim_per = int(action_dim ** (1 / len(action_lowbound))) ## -> 反求出1维的动作空间用几个离散动作表示
         shape = env.action_space.shape[0]
-        discrete_indices = [discrete_action // (action_dim_per ** i) % (action_dim_per) for i in range(shape)]  # 这里存储的是每个维度的离散索引 相当于8进制的表示
+        '''
+        例：BipedalWalker-v3 连续动作空间4维 Box(-1.0, 1.0, (4,), float32) -> 2**4 = 64维
+        action = 0 -> discrete_indices = [0,0,0,0] -> continue_action = [-1,-1,-1,-1]
+        action = 1 -> discrete_indices = [1,0,0,0] -> continue_action = [-1,-1,-1,-1]
+        action = 2 -> discrete_indices = [0,1,0,0] -> continue_action = [-1, 1, -1, -1]
+        action = 3 -> discrete_indices = [1,1,0,0] -> continue_action = [1, 1, -1, -1]
+        action = 4 -> discrete_indices = [0,0,1,0] -> continue_action = [-1, -1, 1, -1]
+        ... action_dim_per=2时 类似于用2进制表示 
+        action = 63 -> discrete_indices = [1,1,1,1] -> continue_action = [1,1,1,1]
+        '''
+        discrete_indices = [discrete_action // (action_dim_per ** i) % (action_dim_per) for i in range(shape)]  # 这里存储的是每个维度的离散索引 
         continue_action = [action_lowbound[i] + discrete_indices[i] / (action_dim_per - 1) * (action_upbound[i] - action_lowbound[i]) for i in range(shape)]
         return np.array(continue_action)
 
 ''' 
-环境见：CartPole-v1,Pendulum-v1,MountainCar-v0;LunarLander-v2,BipedalWalker-v3;FrozenLake-v1 
-https://github.com/openai/gym/blob/master/gym/envs/__init__.py
+环境见：
+离散:CartPole-v1,MountainCar-v0,;LunarLander-v2,;FrozenLake-v1 
+连续：Pendulum-v1,MountainCarContinuous-v0,BipedalWalker-v3
+reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.py 
+介绍：https://gymnasium.farama.org/
 FrozenLake-v1 在5000episode下比较好
 '''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="Pendulum-v1") 
-    parser.add_argument("--max_action", type=float, default=None)
+    parser.add_argument("--env_name", type = str,default="BipedalWalker-v3") 
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
@@ -234,14 +250,13 @@ if __name__ == '__main__':
     parser.add_argument("--policy_name", type=str, default='DQN')
     parser.add_argument("--trick", type=dict, default={'Double':False,'Dueling':False,'PER':False,'Noisy':False,'N_Step':False,'Categorical':False})    
     # device参数
-    parser.add_argument("--device", type=str, default='cpu')
+    parser.add_argument("--device", type=str, default='cuda')
     
     args = parser.parse_args()
     print(args)
     print('Algorithm:',args.policy_name)
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)
-    max_action = max_action if max_action is not None else args.max_action
     action_dim = dim_info[1]
     print(f'Env:{args.env_name}  obs_dim:{dim_info[0]}  action_dim:{dim_info[1]}  max_action:{max_action}  max_episodes:{args.max_episodes}')
 
@@ -249,7 +264,7 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     ### cuda
-    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed) # 经过测试,使用cuda时,只加这句就能保证两次结果一致
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     print('Random Seed:',args.seed)
@@ -277,18 +292,25 @@ if __name__ == '__main__':
     env.action_space.seed(seed=args.seed) if args.random_steps > 0 else None # 针对action复现:env.action_space.sample()
     while episode_num < args.max_episodes:
         step +=1
-
         # 获取动作 区分动作action_为环境中的动作 action为要训练的动作
         if step < args.random_steps:
             action = env.action_space.sample()
+            if max_action is not None: # 若环境连续则将环境连续动作转为离散
+                action = action / max_action
+                ## con -> dis 使得random_steps 可用
+                boundaries = np.linspace(-1, 1, action_dim + 1)
+                # 使用 np.digitize 找到连续动作所在的区间 速度优于for循环
+                discrete_action = np.digitize(action[0], boundaries) - 1
+                action = np.clip(discrete_action, 0, action_dim - 1)
         else:
             if np.random.rand() < args.epsilon:
                 action = np.random.randint(action_dim)
             else:
                 action = policy.select_action(obs)   
-        action_ = action
-        if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box): #如果环境连续，且算法（用于离散）使用离散转连续域技巧
-            action_ = dis_to_con(action, env, action_dim)
+        # 此时输出action为离散动作
+        action_ = action            
+        if args.is_dis_to_con and isinstance(env.action_space, gym.spaces.Box): # = .... and max_action is not None:  #如果环境连续，且算法（用于离散）使用离散转连续域技巧 
+            action_ = dis_to_con(action_, env, action_dim)
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         done = terminated or truncated
