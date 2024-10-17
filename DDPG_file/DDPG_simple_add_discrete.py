@@ -47,7 +47,7 @@ std = 0.2
 要使ddpg从连续空间到离散空间的环境上有两种方法。  (单纯使用softmax来学习一个Categorical分布并不可行，这违背的ddpg初衷，因为Categorical分布是一个随机策略)
 1.  con_to_dis 连续动作转离散的方法 
 2. 使用和SAC类似的方法：重参数化方法(将随机变量的采样与模型参数分离),让离散分布的采样可导  在ddpg中的使用就是 Gumbel-Softmax 技巧  (未实现)
-在MADDPG原论文中使用 Categorical reparameterization with gumbel-softmax 链接：https://arxiv.org/pdf/1611.01144
+在MAAC原论文中使用 Categorical reparameterization with gumbel-softmax 链接：https://arxiv.org/pdf/1611.01144
 参考：maac作者的maddpg ：https://github.com/shariqiqbal2810/maddpg-pytorch/blob/master/utils/misc.py#L48
 3. 使用softmax
 
@@ -158,7 +158,10 @@ class DDPG:
         else:
             probs = self.agent.actor(obs) # 1xaction_dim
             action = torch.multinomial(probs, 1)  # 1xaction_dim
-            action = action.detach().cpu().numpy().squeeze(0)[0] # squeeze -> action_dim ; [] ->标量
+            action = action.detach().cpu().numpy().squeeze(0)[0]# squeeze -> action_dim ; [] ->标量
+            '''action = torch.distributions.Categorical(probs).sample()
+               action = action.detach().cpu().numpy().squeeze(0) # 上两行与此两行结果一致
+            '''
             probs = probs.detach().cpu().numpy().squeeze(0) # action_dim
         
         return action ,  probs 
@@ -314,10 +317,10 @@ if __name__ == '__main__':
     parser.add_argument("--max_episodes", type=int, default=int(500))
     parser.add_argument("--save_freq", type=int, default=int(500//4)) # 与max_episodes有关
     parser.add_argument("--start_steps", type=int, default=500) #ppo无此参数
-    parser.add_argument("--random_steps", type=int, default=2)  ##可选择是否使用 ddpg原论文中没使用 连续环境可加此参数 
+    parser.add_argument("--random_steps", type=int, default=0)  ##可选择是否使用 ddpg原论文中没使用 连续环境可加此参数 
     parser.add_argument("--learn_steps_interval", type=int, default=1)  
     parser.add_argument("--is_dis_to_con", type=bool, default=False) # dqn 默认为True
-    parser.add_argument("--is_con_to_dis", type=bool, default=True) # ddpg 可使用 
+    parser.add_argument("--is_con_to_dis", type=bool, default=False) # ddpg 可使用 
     # 训练参数
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--tau", type=float, default=0.01)
