@@ -66,9 +66,11 @@ def plot_compare_learning_curves(rewards,title,labels,colors ,window_size=20):
     plt.savefig(os.path.join(learning_curves_env_dir, f"compare_{rewards.shape[0]}.png"))
 
 ''' 
-环境见：CartPole-v1,Pendulum-v1,MountainCar-v0,MountainCarContinuous-v0;LunarLander-v2,BipedalWalker-v3;FrozenLake-v1
-https://github.com/openai/gym/blob/master/gym/envs/__init__.py
-FrozenLake-v1 在5000episode下比较好
+环境见：
+离散: CartPole-v1,MountainCar-v0,;LunarLander-v2,;FrozenLake-v1 
+连续：Pendulum-v1,MountainCarContinuous-v0,BipedalWalker-v3
+reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.py 
+介绍：https://gymnasium.farama.org/
 '''
 
 if __name__ == "__main__":
@@ -110,7 +112,7 @@ if __name__ == "__main__":
     rewards = []
     for i in range(args.seed_num):
         rewards_dir = os.path.join(results_env_dir,f"{policy_trick}_{i+1}")    
-        re = np.load(os.path.join(rewards_dir,[f for f in os.listdir(rewards_dir) if f.endswith(".npy")][0])) #找到.npy文件并加载
+        re = np.load(os.path.join(rewards_dir,[f for f in os.listdir(rewards_dir) if f.startswith(f"{args.policy_name}_seed")][0])) #找到_seed_0.npy文件并加载
         rewards.append(re)
     rewards = np.array(rewards) #->(args.seed_num,episodes)
     

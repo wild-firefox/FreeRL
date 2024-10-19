@@ -24,6 +24,7 @@ def policy_trick_name(policy_name, trick=None):
 def plot_learning_curves(rewards,title,label,color ='C0' ,window_size=10):
     # rewards shape (seed_num,episodes)
     # 平滑处理 , np.convolve通过卷积核进行平滑处理 mode='valid' 保证输出和输入的维度一致
+    print(rewards.shape)
     smoothed_rewards = np.array([np.convolve(reward, np.ones(window_size)/window_size, mode='valid') for reward in rewards]) 
     # 计算平均值和标准差
     mean_rewards = np.mean(smoothed_rewards, axis=0)
@@ -76,12 +77,16 @@ if __name__ == "__main__":
     parser.add_argument("--env_name", type=str, default="MountainCarContinuous-v0") # /results/env_name
     parser.add_argument("--results_dir", type=str, default=None) # None (其他算法下直接填None) /results
     parser.add_argument("--learning_curves", type=str, default=None) # None /learning_curves
-    parser.add_argument("--seed_num", type=int, default=1) #评估的随机种子数
+    parser.add_argument("--seed_num", type=int, default=3) #评估的随机种子数
     ## 注意：是否比较其他算法
     parser.add_argument("--is_compare", type=str, default=False) # 多个算法比较
     # trick 评估 算法 or 算法 + trick
-    parser.add_argument("--policy_name", type=str, default='DDPG_simple')  # 算法 # DDPG_simple
-    parser.add_argument("--trick", type=dict, default=None) 
+    parser.add_argument("--policy_name", type=str, default='PPO')  # 算法 # DDPG_simple
+    parser.add_argument("--trick", type=dict, default={'adv_norm':False,
+                                                       'ObsNorm':True,'Batch_ObsNorm':False,  # or 两者择1
+                                                       'reward_norm':False, 'reward_scaling':False, # or 
+                                                       'lr_decay':False,'orthogonal_init':False,'adam_eps':False,'tanh':False})
+    parser.add_argument("--beta", type=bool, default=False)
     args = parser.parse_args()
 
     # 结果文件夹 -取出
@@ -112,7 +117,7 @@ if __name__ == "__main__":
         re = np.load(os.path.join(rewards_dir,[f for f in os.listdir(rewards_dir) if f.startswith(f"{args.policy_name}_seed")][0])) #找到_seed_0.npy文件并加载
         rewards.append(re)
     rewards = np.array(rewards) #->(args.seed_num,episodes)
-    
+    print(rewards.shape)
     # 保存rewards
     np.save(os.path.join(learning_curves_env_dir, f"{policy_trick}_{rewards.shape[0]}_seed.npy"), rewards)
 
