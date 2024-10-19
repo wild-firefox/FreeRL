@@ -170,7 +170,7 @@ class PPO:
     
     ## buffer相关
     '''PPO论文中提到
-    计算V_target 有两种方法1.generalized advantage estimation 2.finite-horizon estimators
+    计算优势函数 有两种方法1.generalized advantage estimation 2.finite-horizon estimators
     第2种实现方法在许多代码上的实现方法不一,有buffer中存入return和value值的方法,也有在buffer里不存，而在在更新时计算的方法。
     这里我们选择第1种,在buffer中不会存在上述争议。
     通常ppo的buffer中存储的是obs, action, reward, next_obs, done, log_pi ;
@@ -408,7 +408,7 @@ if __name__ == '__main__':
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         done = terminated or truncated
-        done_bool = done if not truncated  else False    ### truncated 为超过最大步数
+        done_bool = terminated     ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool, action_log_pi,done)
         episode_reward += reward
         obs = next_obs

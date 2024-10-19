@@ -52,3 +52,4 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 ![alt text](image.png)
 
 * DDPG
+* PPO
