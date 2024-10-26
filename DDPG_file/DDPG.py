@@ -411,7 +411,7 @@ if __name__ == '__main__':
     # 环境参数
     parser.add_argument("--env_name", type = str,default="MountainCarContinuous-v0") 
     # 共有参数
-    parser.add_argument("--seed", type=int, default=0) # 0 10 100
+    parser.add_argument("--seed", type=int, default=100) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
     parser.add_argument("--save_freq", type=int, default=int(500//4)) # 与max_episodes有关
     parser.add_argument("--start_steps", type=int, default=500) #ppo无此参数
