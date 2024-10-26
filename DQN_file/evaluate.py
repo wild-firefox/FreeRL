@@ -35,7 +35,10 @@ def plot_evaluate(evaluate_return,goal_return,model_dir,smooth_rate=0.9):
     plt.xlabel('Episode')
     plt.ylabel('Return')
     plt.title('Evaluate')
-    plt.legend(['goal_return','evaluate_return','smooth_return'])
+    if goal_return:
+        plt.legend(['goal_return','evaluate_return','smooth_return'])
+    else:
+        plt.legend(['evaluate_return','smooth_return'])
     # 保存
     plt.savefig(os.path.join(model_dir,"evaluate.png"))
 

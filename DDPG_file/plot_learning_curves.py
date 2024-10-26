@@ -21,10 +21,23 @@ def policy_trick_name(policy_name, trick=None):
 1.'b': 'blue',(0,0,1) ; 2.'g': 'green',(0,1,0) ; 3.'r': 'red',(1,0,0) ; 4.'c': 'cyan',(0,1,1) ; 5.'m': 'magenta',(1,0,1) ; 6.'y': 'yellow',(1,1,0) ; 7.'k': 'black',(0,0,0) ; 8.'w': 'white',(1,1,1) ; 9.'orange':(1,0.5,0) ; 10.'purple':(0.5,0,0.5)
 默认matplotlib颜色 C0-C9 C0:蓝色 C1:橙色 C2:绿色 C3:红色 C4:紫色 C5:棕色 C6:粉红色 C7:灰色 C8:黄色 C9:青色 和上述的颜色在RGB颜色空间是不一样的,如C0: (0.12156862745098039, 0.4666666666666667, 0.7058823529411765)  
 '''
-def plot_learning_curves(rewards,title,label,color ='C0' ,window_size=10):
-    # rewards shape (seed_num,episodes)
-    # 平滑处理 , np.convolve通过卷积核进行平滑处理 mode='valid' 保证输出和输入的维度一致
+def exponential_smoothing(data, alpha): #指数平滑
+    smooth_data = []
+    for i in range(len(data)):
+        if i == 0:
+            smooth_data.append(data[i])
+        else:
+            smooth_data.append(alpha * smooth_data[-1] + (1 - alpha) * data[i])
+    return np.array(smooth_data)
+
+def plot_learning_curves(rewards,title,label,color ='C0' ,smooth_rate=0.9):
+    '''之前的平滑方法
+    # rewards shape (seed_num,episodes) ###########注意这里平滑了10个episode,window_size=1 则不平滑
+    # 平滑处理 , np.convolve通过卷积核进行平滑处理 mode='valid' 保证输出和输入的维度一致 使用same时则会造成与原始数据不同
     smoothed_rewards = np.array([np.convolve(reward, np.ones(window_size)/window_size, mode='valid') for reward in rewards]) 
+    '''
+    # 平滑处理
+    smoothed_rewards = np.array([exponential_smoothing(reward, smooth_rate) for reward in rewards])
     # 计算平均值和标准差
     mean_rewards = np.mean(smoothed_rewards, axis=0)
     std_rewards = np.std(smoothed_rewards, axis=0)
@@ -41,13 +54,17 @@ def plot_learning_curves(rewards,title,label,color ='C0' ,window_size=10):
     # 保存
     plt.savefig(os.path.join(learning_curves_env_dir, f"{label}.png"))
 
-def plot_compare_learning_curves(rewards,title,labels,colors ,window_size=20):
+def plot_compare_learning_curves(rewards,title,labels,colors ,smooth_rate=0.9):
     # rewards shape (len(compare_tricks),seed_num,episodes) 
     # 绘制图表
     plt.figure(figsize=(10,6))
     for i in range(rewards.shape[0]):
+        '''
         # 平滑处理 , np.convolve通过卷积核进行平滑处理 mode='valid' 保证输出和输入的维度一致
         smoothed_rewards = np.array([np.convolve(reward, np.ones(window_size)/window_size, mode='valid') for reward in rewards[i]]) 
+        '''
+        # 平滑处理
+        smoothed_rewards = np.array([exponential_smoothing(reward, smooth_rate) for reward in rewards[i]])
         # 计算平均值和标准差
         mean_rewards = np.mean(smoothed_rewards, axis=0)
         std_rewards = np.std(smoothed_rewards, axis=0)

@@ -65,7 +65,6 @@ class Actor(nn.Module):
     def forward(self, obs ):
         x = F.relu(self.l1(obs))
         x = F.relu(self.l2(x))
-        mean = self.mean_layer(x)
         mean = torch.tanh(self.mean_layer(x))  # 使得mean在-1,1之间
 
         log_std = self.log_std.expand_as(mean)  # 使得log_std与mean维度相同 输出log_std以确保std=exp(log_std)>0
