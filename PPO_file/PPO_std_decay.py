@@ -22,6 +22,7 @@ import argparse
 import time
 from torch.utils.tensorboard import SummaryWriter
 
+### 仅实现了continue下的std_decay,discrete下 无std
 '''
 一个深度强化学习算法分三个部分实现：
 1.Agent类:包括actor、critic、target_actor、target_critic、actor_optimizer、critic_optimizer、
@@ -119,20 +120,17 @@ class PPO:
 
         ## dacay std # 根据环境修改
         if self.is_continue:
-            self.act_std_min=0.1
-            self.act_std_init=0.4 # 0.4 
+            self.act_std_min=0
+            self.act_std_init=1 # 0.4 
             self.act_std_temp = self.act_std_init
-            #self.act_std = torch.ones(1,action_dim).to(device) * self.act_std_init
-            self.act_std = torch.full((1,action_dim),self.act_std_temp)
-            #self.action_var = torch.full((action_dim,), self.act_std **2).to(device)
+            self.act_std = torch.full((1,action_dim),self.act_std_temp) # full((1,action_dim),2) 表示在1xaction_dim的矩阵中填充2 
 
     def select_action(self, obs):
         obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device) # 1xobs_dim
         ''' 这里先暂时实现连续动作空间的选择，后续再补充离散动作空间的选择 '''
         if self.is_continue: # dqn 无此项
             mean = self.agent.actor(obs) # 1xact_dim
-            #cov_mat = torch.diag(self.action_var).unsqueeze(dim=0) # 协方差矩阵  act_dim x act_dim -> 1 x act_dim x act_dim
-            std = self.act_std.expand_as(mean)
+            std = self.act_std.expand_as(mean)   # 新增
             dist = Normal(mean, std)
             action = dist.sample() # 1 x action
             action_log_pi = dist.log_prob(action) # 
@@ -295,14 +293,16 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     return model_dir
 
 ''' 
-环境见：CartPole-v1,Pendulum-v1,MountainCar-v0;LunarLander-v2,BipedalWalker-v3;FrozenLake-v1 
-https://github.com/openai/gym/blob/master/gym/envs/__init__.py 
-此算法 只写了连续域 BipedalWalker-v3  Pendulum-v1
+环境见：
+离散: CartPole-v1,MountainCar-v0,;LunarLander-v2,;FrozenLake-v1 
+连续：Pendulum-v1,MountainCarContinuous-v0,BipedalWalker-v3
+reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.py 
+介绍：https://gymnasium.farama.org/
 '''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="BipedalWalker-v3") 
+    parser.add_argument("--env_name", type = str,default="MountainCarContinuous-v0") 
     parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
@@ -326,13 +326,14 @@ if __name__ == '__main__':
     parser.add_argument("--minibatch_size", type=int, default=64)
     parser.add_argument("--lmbda", type=float, default=0.95) # GAE参数
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='PPO_decaystd')
+    parser.add_argument("--policy_name", type=str, default='PPO_std_decay')
     parser.add_argument("--decaystd_freq", type=int, default=int(500//12))
     parser.add_argument("--trick", type=dict, default={'adv_norm':False}) 
 
     # device参数
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     args = parser.parse_args()
+    print(args)
     
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)
@@ -352,6 +353,7 @@ if __name__ == '__main__':
     ## 保存文件夹
     model_dir = make_dir(args.env_name,policy_name = args.policy_name ,trick=args.trick)
     writer = SummaryWriter(model_dir)
+    print('model_dir:',model_dir)
 
     ## device参数
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
@@ -394,12 +396,12 @@ if __name__ == '__main__':
             obs,info = env.reset(seed=args.seed)
             episode_reward = 0
 
-            #if is_continue :
+            if is_continue :
             # decay std
-            if episode_num % args.decaystd_freq == 0:
-                policy.act_std_temp = max((policy.act_std_temp - 0.04),policy.act_std_min)#(policy.act_std_init-policy.act_std_min)/args.max_episodes
-                policy.act_std = torch.full((1,action_dim),policy.act_std_temp)
-                #policy.action_var = torch.full((action_dim,), policy.act_std **2).to(device)
+                if episode_num % args.decaystd_freq == 0:
+                    explr_pct_remaining = max(0, args.max_episodes - (episode_num + 1)) / args.max_episodes
+                    policy.act_std_temp = policy.act_std_min + (policy.act_std_init - policy.act_std_min) * explr_pct_remaining
+                    policy.act_std = torch.full((1,action_dim),policy.act_std_temp)
         
         # 满足step,更新网络
         if step % args.horizon == 0:

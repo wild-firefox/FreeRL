@@ -40,16 +40,40 @@ tensorboard --logdir=results/env_name
 tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 
 ## 已实现
-* DQN 1.DQN 
-2.DQN_Double
-3.DQN_Dueling
-4.DQN_PER
-5.DQN_Noisy
-6.DQN_N_Step
-7.DQN_Categorical
-8.DQN_Rainbow
+以下均实现了cuda和cpu切换。
+* DQN 1.DQN   
+2.DQN_Double  
+3.DQN_Dueling  
+4.DQN_PER  
+5.DQN_Noisy  
+6.DQN_N_Step  
+7.DQN_Categorical  
+8.DQN_Rainbow  
 
-![alt text](image.png)
+![alt text](image.png)  
 
-* DDPG
-* PPO
+* DDPG    
+其中包括4细节trick实现：in DDPG ,   discrete的2种实现 in DDPG_simple_add_discrete    
+1.weight_decay  
+2.OUNoise  
+3.net_init  
+4.Batch_ObsNorm or ObsNorm  
+* PPO  
+其中包括7个trick实现 in PPO_with_tricks,一个变体 in PPO_std_decay   
+注：PPO_d,PPO_no_minibath为PPO复刻时的对比实验。  
+1.adv_norm  
+2.ObsNorm or Batch_ObsNorm   
+3.reward_norm or reward_scaling  
+4.lr_decay    
+5.orthogonal_init  
+6.adam_eps  
+7.tanh    
+* TD3
+* SAC
+包含discrete的一种实现 in SAC_add_discrete
+
+未完善：
+* MADDPG
+* MAAC
+* MAPPO
+* CEM_GD3PG
