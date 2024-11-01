@@ -169,6 +169,15 @@ class MADDPG:
                 actions[agent_id] = action
         return actions
     
+    def evaluate_action(self,obs):
+        actions = {}
+        for agent_id, obs in obs.items():
+            obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
+            if self.is_continue: # 现仅实现continue
+                action = self.agents[agent_id].actor(obs)
+                actions[agent_id] = action.detach().cpu().numpy().squeeze(0) # 1xaction_dim -> action_dim
+        return actions
+    
     def add(self, obs, action, reward, next_obs, done):
         for agent_id, buffer in self.buffers.items():
             buffer.add(obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id])
@@ -237,8 +246,8 @@ class MADDPG:
         
     ## 加载模型
     @staticmethod 
-    def load(dim_info, is_continue, model_dir,trick=None):
-        policy = MADDPG(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
+    def load(dim_info, is_continue, model_dir,trick=None,supplement=None):
+        policy = MADDPG(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu',trick = trick,supplement = supplement)
         data = torch.load(os.path.join(model_dir, 'MADDPG.pth'))
         for agent_id, agent in policy.agents.items():
             agent.actor.load_state_dict(data[agent_id])
@@ -437,6 +446,7 @@ if __name__ == '__main__':
         args.supplement = {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}
     
     print(args)
+    print('Algorithm:',args.policy_name)
 
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N)

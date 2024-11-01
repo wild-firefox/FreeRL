@@ -144,6 +144,15 @@ class MADDPG:
                 actions[agent_id] = action
         return actions
     
+    def evaluate_action(self,obs):
+        actions = {}
+        for agent_id, obs in obs.items():
+            obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
+            if self.is_continue: # 现仅实现continue
+                action = self.agents[agent_id].actor(obs)
+                actions[agent_id] = action.detach().cpu().numpy().squeeze(0) # 1xaction_dim -> action_dim
+        return actions
+    
     def add(self, obs, action, reward, next_obs, done):
         for agent_id, buffer in self.buffers.items():
             buffer.add(obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id])
@@ -305,7 +314,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
-
+    print('Algorithm:',args.policy_name)
+    
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N)
     print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')

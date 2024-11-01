@@ -41,19 +41,27 @@ def plot_evaluate(evaluate_return,goal_return,model_dir,smooth_rate=0.9):
     # 保存
     plt.savefig(os.path.join(model_dir,"evaluate.png"))
 
-def render(env_name,policy,model_dir):
+def render(env_name,policy,model_dir,trick = None):
+    if args.trick['ObsNorm']:
+        mean ,std = np.load(os.path.join(model_dir, f"{args.policy_name}_running_mean_std.npy"))
+    if args.trick['Batch_ObsNorm']:
+        mean ,std = np.load(os.path.join(model_dir, f"{args.policy_name}_running_mean_std_batch_size.npy"))
     '''随机挑选一个episode并保存gif'''
     env = gym.make(env_name,render_mode="rgb_array")
     episode = np.random.randint(args.max_episodes)
     obs,info = env.reset(seed = episode)
+    if args.trick['ObsNorm'] or args.trick['Batch_ObsNorm']:
+        obs = (obs - mean) / (std + 1e-8)
     frames = []
     done = False
     while not done:
         frame = env.render()
         frames.append(frame)
-        action = policy.select_action(obs)
+        action = policy.evaluate_action(obs)
         action_ = action
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
+        if args.trick['ObsNorm'] or args.trick['Batch_ObsNorm']:
+            next_obs = (next_obs - mean) / (std + 1e-8)
         done = terminated or truncated
         obs = next_obs
     env.close()
@@ -66,13 +74,11 @@ if __name__ == "__main__":
     parser.add_argument("--results_dir", type=str, default=None)
     parser.add_argument("--env_name", type=str, default="MountainCarContinuous-v0")
     parser.add_argument("--folder_name", type=str, default="PPO_ObsNorm_1") # 模型文件夹名 model名 + trick名
-    # 环境参数
-    parser.add_argument("--max_action", type=float, default=None)
     # 种子和评估次数设置
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--max_episodes", type=int, default=100) #
     ## 是否保存gif
-    parser.add_argument("--save_gif", type=bool, default=False)
+    parser.add_argument("--save_gif", type=bool, default=True)
     # 注意要和训练时一致
     parser.add_argument("--is_dis_to_con", type=bool, default=False) # dqn 默认为True
     parser.add_argument("--policy_name", type=str, default='PPO')   
@@ -85,11 +91,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(args)
     print('Algorithm:',args.policy_name)
-
     
     ## 环境配置
     env,dim_info, max_action, is_continue = get_env(args.env_name,args.is_dis_to_con)
-    max_action = max_action if max_action is not None else args.max_action
     action_dim = dim_info[1]
     print(f'Env:{args.env_name}  obs_dim:{dim_info[0]}  action_dim:{dim_info[1]}  max_action:{max_action}  max_episodes:{args.max_episodes}')
     
@@ -141,5 +145,5 @@ if __name__ == "__main__":
     
     # save gif
     if args.save_gif:
-        render(args.env_name,policy,action_dim,args.is_dis_to_con,model_dir)
+        render(args.env_name,policy,model_dir,trick = args.trick)
 
