@@ -170,7 +170,7 @@ class MAAC: #先无attention 再加入对比
             if self.adaptive_alpha:
                 self.alphas[agent_id] = Alpha(action_dim,alpha = 0.01, requires_grad=True, is_continue= is_continue) # Alpha(action_dim).alpha 才是值
             else:
-                self.alphas[agent_id] = Alpha(action_dim,alpha = 0.01,requires_grad=False, is_continue= is_continue) 
+                self.alphas[agent_id] = Alpha(action_dim,alpha = 0.1,requires_grad=False, is_continue= is_continue) 
         
         self.device = device
         self.is_continue = is_continue
@@ -280,7 +280,7 @@ class MAAC: #先无attention 再加入对比
             soft_update(agent.critic_target, agent.critic, tau)
 
     def save(self, model_path):
-        ploicy_name = 'MAAC' if self.attention else 'MASAC'
+        ploicy_name = 'MAAC' if self.attention else 'MAAC'
         torch.save(
             {name: agent.actor.state_dict() for name, agent in self.agents.items()},
             os.path.join(model_path, f'{ploicy_name}.pth')
@@ -290,7 +290,7 @@ class MAAC: #先无attention 再加入对比
     @staticmethod 
     def load(dim_info, model_dir):
         policy = MAAC(dim_info, is_continue = False, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
-        ploicy_name = 'MAAC' if policy.attention else 'MASAC'
+        ploicy_name = 'MAAC' if policy.attention else 'MAAC'
         torch.load(
             os.path.join(model_dir, f'{ploicy_name}.pth')
         )
@@ -356,11 +356,11 @@ https://pettingzoo.farama.org/environments/mpe
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
-    parser.add_argument("--N", type=int, default=3) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--env_name", type = str,default="simple_spread_v3")  # alpha = 0.1 for N=5
+    parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
     parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
-    parser.add_argument("--seed", type=int, default=0) # 0 10 100
+    parser.add_argument("--seed", type=int, default=100) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(600))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数 满足此开始自己探索
@@ -369,7 +369,7 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--tau", type=float, default=0.01)
     ## AC参数 
-    parser.add_argument("--actor_lr", type=float, default=1e-3) # 1e-3
+    parser.add_argument("--actor_lr", type=float, default=1e-3) # 1e-3 #
     parser.add_argument("--critic_lr", type=float, default=1e-3)
     ## buffer参数   
     parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
@@ -396,6 +396,7 @@ if __name__ == '__main__':
     ## 保存model文件夹
     model_dir = make_dir(args.env_name,policy_name = args.policy_name,trick=args.trick)
     writer = SummaryWriter(model_dir)
+    print('model_dir:',model_dir)
 
     ##
     device = torch.device('cpu')
@@ -411,6 +412,7 @@ if __name__ == '__main__':
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
     obs,info = env.reset(seed=args.seed)
+    {agent: env.action_space(agent).seed(seed=args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
     while episode_num < args.max_episodes:
         step +=1
         # 获取动作
@@ -429,7 +431,7 @@ if __name__ == '__main__':
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
-        done_bool = {agent_id: done[agent_id] if not truncated[agent_id] else False  for agent_id in env_agents} ### truncated 为超过最大步数
+        done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
         obs = next_obs

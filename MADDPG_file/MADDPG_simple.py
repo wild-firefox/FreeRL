@@ -20,7 +20,6 @@ import argparse
 from torch.utils.tensorboard import SummaryWriter
 import time
 import re
-import pickle # 保存字典用
 
 '''maddpg 
 论文：Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments 链接：https://arxiv.org/abs/1706.02275 
@@ -40,42 +39,21 @@ actor_lr = 1e-2
 critic_lr = 1e-2
 gamma = 0.95
 buffer_size = 1e6
-batch_size 
+batch_size = 1024
+tau = 0.01
 '''
 
-'''
-MADDPG版是在simple版的基础上为加入原始DDPG.py中的4个supplement
-MADDPG_simple版为选择MADDPG_reproduction的actor_learn_way=0的版本
-'''
 
+# 此simple为选择MADDPG_reproduction的actor_learn_way=0的版本
 ## 第一部分：定义Agent类
-def other_net_init(layer):
-    if isinstance(layer, nn.Linear):
-        fan_in = layer.weight.data.size(0)
-        limit = 1.0 / (fan_in ** 0.5)
-        nn.init.uniform_(layer.weight, -limit, limit)
-        nn.init.uniform_(layer.bias, -limit, limit)
-
-def final_net_init(layer,low,high):
-    if isinstance(layer, nn.Linear):
-        nn.init.uniform_(layer.weight, low, high)
-        nn.init.uniform_(layer.bias, low, high)
-
 class Actor(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_1=128, hidden_2=128,supplement=None,pixel_case=False):
+    def __init__(self, obs_dim, action_dim, hidden_1=128, hidden_2=128 ):
         super(Actor, self).__init__()
         self.l1 = nn.Linear(obs_dim, hidden_1)
         self.l2 = nn.Linear(hidden_1, hidden_2)
         self.l3 = nn.Linear(hidden_2, action_dim)
 
-        if supplement['net_init']:
-            other_net_init(self.l1)
-            other_net_init(self.l2)
-            if pixel_case:
-                final_net_init(self.l3, low=-3e-4, high=3e-4)
-            else:
-                final_net_init(self.l3, low=-3e-3, high=3e-3)
-
+    
     def forward(self, x):
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
@@ -83,21 +61,13 @@ class Actor(nn.Module):
         return x
 
 class Critic(nn.Module):
-    def __init__(self, dim_info:dict, hidden_1=128 , hidden_2=128,supplement=None,pixel_case=False):
+    def __init__(self, dim_info:dict, hidden_1=128 , hidden_2=128):
         super(Critic, self).__init__()
         global_obs_act_dim = sum(sum(val) for val in dim_info.values())  
         
         self.l1 = nn.Linear(global_obs_act_dim, hidden_1)
         self.l2 = nn.Linear(hidden_1, hidden_2)
         self.l3 = nn.Linear(hidden_2, 1)
-
-        if supplement['net_init']:
-            other_net_init(self.l1)
-            other_net_init(self.l2)
-            if pixel_case:
-                final_net_init(self.l3, low=-3e-4, high=3e-4)
-            else:
-                final_net_init(self.l3, low=-3e-3, high=3e-3)
 
     def forward(self, s, a): # 传入全局观测和动作
         sa = torch.cat(list(s)+list(a), dim = 1)
@@ -110,15 +80,12 @@ class Critic(nn.Module):
         return q
 
 class Agent:
-    def __init__(self, obs_dim, action_dim, dim_info, actor_lr, critic_lr, device,supplement):   
-        self.actor = Actor(obs_dim, action_dim, supplement = supplement ).to(device)
-        self.critic = Critic( dim_info, supplement = supplement ).to(device)
+    def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, device,):   
+        self.actor = Actor(obs_dim, action_dim,  ).to(device)
+        self.critic = Critic( dim_info ).to(device)
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
-        if supplement['weight_decay']:                                                                
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr,weight_decay=1e-3) #原ddpg论文值: 1e-2
-        else:
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
 
         self.actor_target = deepcopy(self.actor)
         self.critic_target = deepcopy(self.critic)
@@ -138,29 +105,24 @@ class Agent:
 
 ## 第二部分：定义DQN算法类
 class MADDPG: 
-    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, buffer_size, device, trick ,supplement):        
+    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, buffer_size, device, trick = None):        
         self.agents  = {}
         self.buffers = {}
         for agent_id, (obs_dim, action_dim) in dim_info.items():
-            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, device ,supplement)
+            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, device = device)
             self.buffers[agent_id] = Buffer(buffer_size, obs_dim, act_dim = action_dim if is_continue else 1, device = device)
 
         self.device = device
         self.is_continue = is_continue
         self.agent_x = list(self.agents.keys())[0] #sample 用
 
-        self.regular = False # 与DDPG中使用的weight_decay原理一致 这里用weight_decay
-        self.supplement = supplement
-        if self.supplement['Batch_ObsNorm']:
-            self.batch_size_obs_norm = {agent_id: Normalization_batch_size(shape = dim_info[agent_id][0], device = device) for agent_id in dim_info.keys()}
+        self.regular = False # 与DDPG中使用的weight_decay原理一致 
+
 
     def select_action(self, obs):
         actions = {}
         for agent_id, obs in obs.items():
             obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
-            if self.supplement['Batch_ObsNorm']:
-                obs = self.batch_size_obs_norm[agent_id](obs, update = False)
-            
             if self.is_continue: # 现仅实现continue
                 action = self.agents[agent_id].actor(obs)
                 actions[agent_id] = action.detach().cpu().numpy().squeeze(0) # 1xaction_dim -> action_dim
@@ -180,9 +142,6 @@ class MADDPG:
         obs, action, reward, next_obs, done = {}, {}, {}, {}, {}
         for agent_id, buffer in self.buffers.items():
             obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id] = buffer.sample(indices)
-            if self.supplement['Batch_ObsNorm']:
-                obs[agent_id] = self.batch_size_obs_norm[agent_id](obs[agent_id], update = True)
-                next_obs[agent_id] = self.batch_size_obs_norm[agent_id](next_obs[agent_id], update = False)
 
         return obs, action, reward, next_obs, done #包含所有智能体的数据
     
@@ -295,99 +254,6 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     os.makedirs(model_dir)
     return model_dir
 
-#解释见DDPG.py
-class OUNoise:
-    def __init__(self, action_dim, mu=0, theta=0.15, sigma=0.1, dt=1e-2, scale= None):
-        self.action_dim = action_dim
-        self.mu = mu
-        self.theta = theta
-        self.sigma = sigma
-        self.dt = dt 
-        self.state = np.ones(self.action_dim) * self.mu
-        self.reset()
-        self.scale = scale 
-
-    def reset(self):
-        self.state = np.ones(self.action_dim) * self.mu
-
-    def noise(self):
-        x = self.state
-        dx = self.theta * (self.mu - x) +  np.sqrt(self.dt) * self.sigma * np.random.randn(self.action_dim)
-        self.state = x + dx
-        if self.scale is None:
-            return self.state 
-        else:
-            return self.state * self.scale
-
-class RunningMeanStd:
-    # Dynamically calculate mean and std
-    def __init__(self, shape):  # shape:the dimension of input data
-        self.n = 0
-        self.mean = np.zeros(shape)
-        self.S = np.zeros(shape)
-        self.std = np.sqrt(self.S)
-
-    def update(self, x):
-        x = np.array(x)
-        self.n += 1
-        if self.n == 1:
-            self.mean = x
-            self.std = x
-        else:
-            old_mean = self.mean.copy()
-            self.mean = old_mean + (x - old_mean) / self.n
-            self.S = self.S + (x - old_mean) * (x - self.mean)
-            self.std = np.sqrt(self.S / self.n)
-
-
-class Normalization:
-    def __init__(self, shape):
-        self.running_ms = RunningMeanStd(shape=shape)
-
-    def __call__(self, x, update=True):
-        # Whether to update the mean and std,during the evaluating,update=False #是否更新均值和方差，在评估时，update=False
-        if update:
-            self.running_ms.update(x)
-        x = (x - self.running_ms.mean) / (self.running_ms.std + 1e-8)
-
-        return x
-
-'''modify 
-根据上述RuningMeanStd的方法和ddpg原论文的描述，将RuningMeanStd的方法（一个state一个state的更新）改进成ddpg原论文描述的（一个batch_size的state一个batch_size的state的更新）
-'''
-class RunningMeanStd_batch_size:
-    # Dynamically calculate mean and std
-    def __init__(self, shape,device):  # shape:the dimension of input data
-        self.n = 0
-        self.mean = torch.zeros(shape).to(device)
-        self.S = torch.zeros(shape).to(device)
-        self.std = torch.sqrt(self.S).to(device)
-
-    def update(self, x):
-        x = x.mean(dim=0,keepdim=True)
-        self.n += 1
-        if self.n == 1:
-            self.mean = x
-            self.std = x
-        else:
-            old_mean = self.mean 
-            self.mean = old_mean + (x - old_mean) / self.n
-            self.S = self.S + (x - old_mean) * (x - self.mean)
-            self.std = torch.sqrt(self.S / self.n)
-
-
-class Normalization_batch_size:
-    def __init__(self, shape, device):
-        self.running_ms = RunningMeanStd_batch_size(shape,device)
-
-    def __call__(self, x, update=True):
-        # Whether to update the mean and std,during the evaluating,update=False #是否更新均值和方差，在评估时，update=False
-        if update:
-            self.running_ms.update(x)
-        x = (x - self.running_ms.mean) / (self.running_ms.std + 1e-8)
-
-        return x
-
 ''' 
 环境见:simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
 具体见:https://pettingzoo.farama.org/environments/mpe
@@ -413,29 +279,18 @@ if __name__ == '__main__':
     ## buffer参数   
     parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
-    # DDPG 独有参数 
-    ## gauss noise
-    parser.add_argument("--gauss_sigma", type=float, default=1) # 高斯标准差 # 0.1 
+    # DDPG 独有参数 noise
+    parser.add_argument("--gauss_sigma", type=float, default=1) # 高斯标准差 # 0.1 #  1 for simple_spread_v3 更稳定些
     parser.add_argument("--gauss_scale", type=float, default=1)
     parser.add_argument("--gauss_init_scale", type=float, default=1) # 若不设置衰减，则设置成None
     parser.add_argument("--gauss_final_scale", type=float, default=0.0)
-    ## OU noise
-    parser.add_argument("--ou_sigma", type=float, default=1) # 
-    parser.add_argument("--ou_dt", type=float, default=1)
-    parser.add_argument("--init_scale", type=float, default=1) # 若不设置衰减，则设置成None # maddpg值:ou_sigma 0.2 init_scale:0.3
-    parser.add_argument("--final_scale", type=float, default=0.0) 
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MADDPG')
-    parser.add_argument("--supplement", type=dict, default={'weight_decay':True,'OUNoise':True,'ObsNorm':False,'net_init':True,'Batch_ObsNorm':True}) # ObsNorm效果差于Batch_ObsNorm,选择Batch_ObsNorm
+    parser.add_argument("--policy_name", type=str, default='MADDPG_simple')
     parser.add_argument("--trick", type=dict, default=None)  
     # device参数   
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
-    
+
     args = parser.parse_args()
-    if args.policy_name == 'MADDPG_simple' or args.supplement == {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}:
-        args.policy_name = 'MADDPG_simple'
-        args.supplement = {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}
-    
     print(args)
 
     ## 环境配置
@@ -460,7 +315,7 @@ if __name__ == '__main__':
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
-    policy = MADDPG(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick,args.supplement)
+    policy = MADDPG(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick)
 
     time_ = time.time()
     ## 训练
@@ -473,14 +328,6 @@ if __name__ == '__main__':
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
     if args.gauss_init_scale is not None:
         args.gauss_scale = args.gauss_init_scale
-
-    if args.supplement['ObsNorm']:
-        obs_norm = {agent_id  :Normalization(shape = dim_info[agent_id][0]) for agent_id in env_agents }
-        obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
-
-    if args.supplement['OUNoise']:
-        ou_noise = { agent_id : OUNoise(dim_info[agent_id][1], sigma = args.ou_sigma, dt=args.ou_dt, scale = args.init_scale) for agent_id in env_agents }#
-    
     while episode_num < args.max_episodes:
         step +=1
 
@@ -491,16 +338,11 @@ if __name__ == '__main__':
         else:
             action = policy.select_action(obs) 
             # 加噪音  对于pettingzoo环境,得加上dtype = np.float32
-            if args.supplement['OUNoise']:
-                action_ = {agent_id: np.clip(action[agent_id] * max_action + ou_noise[agent_id].noise()* max_action, -max_action, max_action ,dtype = np.float32) for agent_id in env_agents}
-            else:
-                action_ = {agent_id: np.clip(action[agent_id] * max_action + args.gauss_scale * np.random.normal(scale = args.gauss_sigma * max_action, size = dim_info[agent_id][1]), -max_action, max_action ,dtype = np.float32) for agent_id in env_agents} 
+            action_ = {agent_id: np.clip(action[agent_id] * max_action + args.gauss_scale * np.random.normal(scale = args.gauss_sigma * max_action, size = dim_info[agent_id][1]), -max_action, max_action ,dtype = np.float32) for agent_id in env_agents} 
             action_ = {agent_id: (action_[agent_id] + 1) / 2 for agent_id in env_agents} # [-1,1] -> [0,1] 
         
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
-        if args.supplement['ObsNorm']:
-            next_obs = {agent_id : obs_norm[agent_id](next_obs[agent_id]) for agent_id in env_agents }
 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
         done_bool = {agent_id: done[agent_id] if not truncated[agent_id] else False  for agent_id in env_agents} ### truncated 为超过最大步数
@@ -510,13 +352,6 @@ if __name__ == '__main__':
         
         # episode 结束 ### 在pettingzoo中,env.agents 为空时  一个episode结束
         if any(done.values()):
-            if args.supplement['OUNoise']:
-                [ou_noise[agent_id].reset() for agent_id in env_agents]
-                ## OUNoise scale若有 scale衰减 参考:https://github.com/shariqiqbal2810/maddpg-pytorch/blob/master/main.py#L71
-                if args.init_scale is not None:
-                    explr_pct_remaining = max(0, args.max_episodes - (episode_num + 1)) / args.max_episodes # 剩余探索百分比
-                    for agent_id in env_agents:
-                        ou_noise[agent_id].scale = args.final_scale + (args.init_scale - args.final_scale) * explr_pct_remaining
             ## gauss_noise 衰减
             if args.gauss_init_scale is not None:
                 explr_pct_remaining = max(0, args.max_episodes - (episode_num + 1)) / args.max_episodes
@@ -530,8 +365,6 @@ if __name__ == '__main__':
 
             episode_num += 1
             obs,info = env.reset(seed=args.seed)
-            if args.supplement['ObsNorm']:
-                obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             episode_reward = {agent_id: 0 for agent_id in env_agents}
         
         # 满足step,更新网络
@@ -546,10 +379,3 @@ if __name__ == '__main__':
         np.save(os.path.join(model_dir,f"{args.policy_name}_seed_{args.seed}.npy"),train_return_)
     else:
         np.save(os.path.join(model_dir,f"{args.policy_name}_seed_{args.seed}_N_{len(env_agents)}.npy"),train_return_)
-    
-    if args.supplement['ObsNorm']:
-        obs_norm_ = {agent_id: [obs_norm[agent_id].running_ms.mean, obs_norm[agent_id].running_ms.std] for agent_id in env_agents}
-        pickle.dump(obs_norm_, open(os.path.join(model_dir,'obs_norm.pkl'), 'wb'))
-    if args.supplement['Batch_ObsNorm']:
-        batch_size_obs_norm_ = {agent_id: [policy.batch_size_obs_norm[agent_id].running_ms.mean.detach().cpu().numpy(), policy.batch_size_obs_norm[agent_id].running_ms.std.detach().cpu().numpy()] for agent_id in env_agents}
-        pickle.dump(batch_size_obs_norm_, open(os.path.join(model_dir,'batch_size_obs_norm.pkl'), 'wb') )

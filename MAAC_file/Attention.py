@@ -107,7 +107,7 @@ class Attention_Critic(nn.Module):
         self.bias_fc1 = nn.Linear(attention_dim, attention_dim)
         self.bias_fc2 = nn.Linear(attention_dim, 1) 
         
-    def forward(self, s,a, agents,require_v  = False): #agents=Agent() 
+    def forward(self, s,a, agents,require_v  = False): #agents[agent_id]=Agent() 
         s = torch.cat(list(s), dim=1) # batch_size * state_dim(state 表示全局状态)
         a = torch.cat(list(a), dim=1)  
         agent_id_list = list(agents.keys())
@@ -178,7 +178,8 @@ class Attention_Critic(nn.Module):
             return q ,all_q #输出 batch_size * 1
 
 
-        
+''' 
+# 测试代码
 if __name__ == '__main__':
     import random
     def set_seed(seed):
@@ -210,7 +211,7 @@ if __name__ == '__main__':
     # print("Result 1:", q1[0])
     # print("Result 2:", q2[0])
 
-
+'''
 
         
         

@@ -39,6 +39,8 @@ tensorboard --logdir=results/env_name
 
 tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 
+注：上述生成图的画图函数(in plot_learning_curves.py)已修改，由卷积滑动smooth造成的横坐标显示不全改成了可以显示全的指数平滑。
+
 ## 已实现
 以下均实现了cuda和cpu切换。
 * DQN 1.DQN   
@@ -53,13 +55,14 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 ![alt text](image.png)  
 
 * DDPG    
-其中包括4细节trick实现：in DDPG ,   discrete的2种实现 in DDPG_simple_add_discrete    
+其中包括4细节trick实现：in DDPG ,   discrete的2种实现 in DDPG_simple_add_discrete.py 
+注：lose为利用gumbel_softmax来实现DDPG_discrete留存的失败实现。   
 1.weight_decay  
 2.OUNoise  
 3.net_init  
 4.Batch_ObsNorm or ObsNorm  
 * PPO  
-其中包括7个trick实现 in PPO_with_tricks,一个变体 in PPO_std_decay   
+其中包括7个trick实现 in PPO_with_tricks.pt,一个变体 in PPO_std_decay.py   
 注：PPO_d,PPO_no_minibath为PPO复刻时的对比实验。  
 1.adv_norm  
 2.ObsNorm or Batch_ObsNorm   
@@ -70,10 +73,17 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 7.tanh    
 * TD3
 * SAC
-包含discrete的一种实现 in SAC_add_discrete
+包含discrete的一种实现 in SAC_add_discrete.py
+* MADDPG  
+注：
+1.MADDPG_reproduction.py,主要实现论文中说明的两种方式。      
+2.MADDPG_simple.py 为MADDPG论文中伪代码的实现,也为DDPG_simple.py的多智能体版本。
+3.MADDPG.py 为DDPG.py的多智能体版本。  
+其中包括1个trick实现 in MADDPG_simple_with_tricks.py
+1.ATT  
 
 未完善：
-* MADDPG
+* MADDPG中所需的评估代码
 * MAAC
 * MAPPO
 * CEM_GD3PG

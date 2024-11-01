@@ -402,9 +402,12 @@ class Normalization_batch_size:
 
         return x
 ''' 
-环境见：CartPole-v1,Pendulum-v1,MountainCar-v0,MountainCarContinuous-v0;LunarLander-v2,BipedalWalker-v3;FrozenLake-v1
-具体见：https://github.com/openai/gym/blob/master/gym/envs/__init__.py 
-此算法 只写了连续域 BipedalWalker-v3  Pendulum-v1
+环境见：
+离散: CartPole-v1,MountainCar-v0,;LunarLander-v2,;FrozenLake-v1 
+连续：Pendulum-v1,MountainCarContinuous-v0,BipedalWalker-v3
+reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.py 
+介绍：https://gymnasium.farama.org/
+此算法只写了连续环境的实现
 '''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
