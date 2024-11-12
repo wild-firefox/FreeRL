@@ -393,6 +393,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     print(args)
+    print('-'*50)
     print('Algorithm:',args.policy_name)
     
     ## 环境配置

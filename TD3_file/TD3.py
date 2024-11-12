@@ -353,13 +353,13 @@ if __name__ == '__main__':
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     
     args = parser.parse_args()
-    print('Algorithm:',args.policy_name)
+    
     if args.policy_name == 'TD3':
         args.realize = {'clip_double':True,'policy_noise':True,'twin_delay':True}
     print(args)
+    print('-'*50)
+    print('Algorithm:',args.policy_name)
 
-
-    
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)
     action_dim = dim_info[1]

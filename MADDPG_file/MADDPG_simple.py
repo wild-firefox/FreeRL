@@ -196,11 +196,10 @@ class MADDPG:
             soft_update(agent.actor_target, agent.actor, tau)
             soft_update(agent.critic_target, agent.critic, tau)
 
-
-    def save(self, model_path):
+    def save(self, model_dir):
         torch.save(
             {name: agent.actor.state_dict() for name, agent in self.agents.items()},
-            os.path.join(model_path, 'MADDPG.pth')
+            os.path.join(model_dir, 'MADDPG.pth')
         )
         
     ## 加载模型
@@ -276,6 +275,7 @@ if __name__ == '__main__':
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(600))
+    parser.add_argument("--save_freq", type=int, default=int(600//4))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
     parser.add_argument("--random_steps", type=int, default=0)  # 满足此开始自己探索
     parser.add_argument("--learn_steps_interval", type=int, default=1)
@@ -301,6 +301,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
+    print('-' * 50)
     print('Algorithm:',args.policy_name)
 
     ## 环境配置
@@ -355,7 +356,7 @@ if __name__ == '__main__':
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
-        done_bool = {agent_id: done[agent_id] if not truncated[agent_id] else False  for agent_id in env_agents} ### truncated 为超过最大步数
+        done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
         obs = next_obs
@@ -380,6 +381,10 @@ if __name__ == '__main__':
         # 满足step,更新网络
         if step > args.start_steps and step % args.learn_steps_interval == 0:
             policy.learn(args.batch_size, args.gamma, args.tau)
+
+        # 保存模型
+        if episode_num % args.save_freq == 0:
+            policy.save(model_dir)
 
     print('total_time:',time.time()-time_)
     policy.save(model_dir)

@@ -235,7 +235,7 @@ class PPO:
         obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device) # 1xobs_dim
         if self.trick['Batch_ObsNorm']:
             obs = self.batch_size_obs_norm(obs,update=False)
-        ''' 这里先暂时实现连续动作空间的选择，后续再补充离散动作空间的选择 '''
+
         if self.is_continue: # dqn 无此项
             if self.actor_dist['Beta']:
                 alpha, beta = self.agent.actor(obs)
@@ -439,6 +439,7 @@ if __name__ == '__main__':
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
+    parser.add_argument("--save_freq", type=int, default=int(500//4))
     parser.add_argument("--start_steps", type=int, default=0) #ppo无此参数
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数
     parser.add_argument("--learn_steps_interval", type=int, default=0)  # 这个算法不方便用
@@ -466,6 +467,12 @@ if __name__ == '__main__':
     # device参数
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     args = parser.parse_args()
+    # 检查 reward_norm 和 reward_scaling 的值
+    if args.trick['reward_norm'] and args.trick['reward_scaling']:
+        raise ValueError("reward_norm 和 reward_scaling 不能同时为 True")
+    if args.trick['ObsNorm'] and args.trick['Batch_ObsNorm']:
+        raise ValueError("ObsNorm 和 Batch_ObsNorm 不能同时为 True")
+    
     print(args)
     print('-' * 50)
     print('Algorithm:',args.policy_name)
@@ -561,6 +568,10 @@ if __name__ == '__main__':
             policy.learn(args.minibatch_size, args.gamma, args.lmbda, args.clip_param, args.K_epochs, args.entropy_coefficient)
             if args.trick['lr_decay']:
                 policy.lr_decay(episode_num,max_episodes=args.max_episodes)
+        
+        # 保存模型
+        if episode_num % args.save_freq == 0:
+            policy.save(model_dir)
 
     
     print('total_time:',time.time()-time_)

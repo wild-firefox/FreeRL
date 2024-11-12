@@ -467,6 +467,7 @@ if __name__ == '__main__':
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     args = parser.parse_args()
     print(args)
+    print('-'*50)
     print('Algorithm:',args.policy_name)
     
     ## 环境配置

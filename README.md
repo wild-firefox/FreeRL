@@ -81,9 +81,12 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 3.MADDPG.py 为DDPG.py的多智能体版本。  
 其中包括1个trick实现 in MADDPG_simple_with_tricks.py
 1.ATT  
+* MAPPO 
+注：MAPPO_max 为复刻原代码实现 其中有12个tricks MAPPO 为无tricks的实现。
+
+
+
 
 未完善：
-* MADDPG中所需的评估代码
 * MAAC
-* MAPPO
 * CEM_GD3PG

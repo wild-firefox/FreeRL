@@ -114,6 +114,9 @@ if __name__ == "__main__":
     parser.add_argument("--supplement", type=dict, default={'weight_decay':True,'OUNoise':True,'ObsNorm':False,'net_init':True,'Batch_ObsNorm':True})
     parser.add_argument("--trick", type=dict, default=None)  
     args = parser.parse_args()
+    if args.trick['ObsNorm'] and args.trick['Batch_ObsNorm']:
+        raise ValueError("ObsNorm 和 Batch_ObsNorm 不能同时为 True")
+    
     if args.policy_name == 'MADDPG_simple' or args.supplement == {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}:
         args.policy_name = 'MADDPG_simple'
         args.supplement = {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}

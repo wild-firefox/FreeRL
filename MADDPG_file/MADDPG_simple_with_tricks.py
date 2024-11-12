@@ -314,6 +314,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
+    print('-' * 50)
     print('Algorithm:',args.policy_name)
     
     ## 环境配置
@@ -368,7 +369,7 @@ if __name__ == '__main__':
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
-        done_bool = {agent_id: done[agent_id] if not truncated[agent_id] else False  for agent_id in env_agents} ### truncated 为超过最大步数
+        done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
         obs = next_obs

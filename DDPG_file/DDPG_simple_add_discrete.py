@@ -18,7 +18,7 @@ import re
 import time
 from torch.utils.tensorboard import SummaryWriter
 ## discrete
-from misc import onehot_from_logits, gumbel_softmax
+##from misc import onehot_from_logits, gumbel_softmax
 
 
 '''simple版为类似td3作者的版本 易于简单了解其算法本质'''
@@ -344,6 +344,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     print(args)
+    print('-'*50)
     print('Algorithm:',args.policy_name)
     
     ## 环境配置

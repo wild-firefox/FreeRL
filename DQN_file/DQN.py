@@ -254,6 +254,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     print(args)
+    print('-'*50)
     print('Algorithm:',args.policy_name)
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)

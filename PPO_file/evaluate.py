@@ -89,6 +89,12 @@ if __name__ == "__main__":
                                                        'lr_decay':False,'orthogonal_init':False,'adam_eps':False,'tanh':False})
     parser.add_argument("--beta", type=bool, default=False)
     args = parser.parse_args()
+
+    # 检查 reward_norm 和 reward_scaling 的值
+    if args.trick['reward_norm'] and args.trick['reward_scaling']:
+        raise ValueError("reward_norm 和 reward_scaling 不能同时为 True")
+    if args.trick['ObsNorm'] and args.trick['Batch_ObsNorm']:
+        raise ValueError("ObsNorm 和 Batch_ObsNorm 不能同时为 True")
     print(args)
     print('Algorithm:',args.policy_name)
     

@@ -334,7 +334,9 @@ if __name__ == '__main__':
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     args = parser.parse_args()
     print(args)
-    
+    print('-' * 50)
+    print('Algorithm:',args.policy_name)
+
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name,args.is_dis_to_con)
     max_action = max_action if max_action is not None else args.max_action

@@ -149,7 +149,8 @@ class MADDPG:
         self.is_continue = is_continue
         self.agent_x = list(self.agents.keys())[0] #sample 用
 
-        self.regular = False # 与DDPG中使用的weight_decay原理一致 这里用weight_decay
+        self.regular = False # L2正则化 与DDPG中使用的weight_decay原理一致 但具体计算稍有差别 这里用weight_decay 
+        ''' 在论文 https://arxiv.org/pdf/1910.09191 中最后的附录中展示这两者的差异,在PPO上实验了两个环境,比较发现:使用L2正则化的效果比weight_decay稍好'''
         self.supplement = supplement
         if self.supplement['Batch_ObsNorm']:
             self.batch_size_obs_norm = {agent_id: Normalization_batch_size(shape = dim_info[agent_id][0], device = device) for agent_id in dim_info.keys()}
@@ -446,6 +447,7 @@ if __name__ == '__main__':
         args.supplement = {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}
     
     print(args)
+    print('-' * 50)
     print('Algorithm:',args.policy_name)
 
     ## 环境配置
@@ -513,7 +515,7 @@ if __name__ == '__main__':
             next_obs = {agent_id : obs_norm[agent_id](next_obs[agent_id]) for agent_id in env_agents }
 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
-        done_bool = {agent_id: done[agent_id] if not truncated[agent_id] else False  for agent_id in env_agents} ### truncated 为超过最大步数
+        done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
         obs = next_obs

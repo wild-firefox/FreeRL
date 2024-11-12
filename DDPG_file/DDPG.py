@@ -449,11 +449,17 @@ if __name__ == '__main__':
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     
     args = parser.parse_args()
+
+    if args.trick['ObsNorm'] and args.trick['Batch_ObsNorm']:
+        raise ValueError("ObsNorm 和 Batch_ObsNorm 不能同时为 True")
+
     # 如果 policy_name 是 'DDPG_simple'，或者 supplement 符合simple条件，就设置两者
     if args.policy_name == 'DDPG_simple' or args.supplement == {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}:
         args.policy_name = 'DDPG_simple'
         args.supplement = {'weight_decay':False,'OUNoise':False,'ObsNorm':False,'net_init':False,'Batch_ObsNorm':False}
+    
     print(args)
+    print('-'*50)
     print('Algorithm:',args.policy_name)
     print("Supplement:",args.supplement) if args.supplement else None
     
