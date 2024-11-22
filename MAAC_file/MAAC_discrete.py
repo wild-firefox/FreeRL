@@ -163,7 +163,7 @@ class MAAC: #先无attention 再加入对比
             else:
                 self.buffers[agent_id] = Buffer(buffer_size, obs_dim, act_dim = action_dim if is_continue else 1, device = 'cpu')
             
-        self.adaptive_alpha = False
+        self.adaptive_alpha = True
         self.alphas = {} 
 
         for agent_id, (obs_dim, action_dim) in dim_info.items():
@@ -349,18 +349,18 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     os.makedirs(model_dir)
     return model_dir
 
-''' 环境见
-simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
-https://pettingzoo.farama.org/environments/mpe
+''' 
+环境见:simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
+具体见:https://pettingzoo.farama.org/environments/mpe
+注意：环境中N个智能体的设置
 '''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3")  # alpha = 0.1 for N=5
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
-    parser.add_argument("--seed", type=int, default=100) # 0 10 100
+    parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(600))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数 满足此开始自己探索
@@ -376,19 +376,30 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
     # trick参数
     parser.add_argument("--policy_name", type=str, default='MAAC_discrete')
-    parser.add_argument("--trick", type=dict, default=None)  
+    parser.add_argument("--trick", type=dict, default=None) 
+
+    # device参数   
+    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda 
 
     args = parser.parse_args()
+
+    print(args)
+    print('-' * 50)
+    print('Algorithm:',args.policy_name)
 
     ## 环境配置
     continuous_actions = False
     env,dim_info,max_action,is_continue = get_env(args.env_name,env_agent_n = args.N,continuous_actions=continuous_actions)
-    max_action = args.max_action if args.max_action is not None else max_action ##
-    print(max_action)
-    print(dim_info)
+    print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')
+    
     ## 随机数种子
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    ## cuda
+    torch.cuda.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print('Random Seed:',args.seed)
     # random.seed(args.seed)
     # os.environ['PYTHONHASHSEED'] = str(args.seed)
     # torch.use_deterministic_algorithms(True)
@@ -398,8 +409,8 @@ if __name__ == '__main__':
     writer = SummaryWriter(model_dir)
     print('model_dir:',model_dir)
 
-    ##
-    device = torch.device('cpu')
+    ## device参数
+    device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
     policy = MAAC(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick)

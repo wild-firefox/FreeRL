@@ -81,9 +81,23 @@ import pickle
 另外:
 mappo与rmappo区别见原代码:https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/scripts/train/train_mpe.py#L68
 区别：rmappo使用了RNN
+原代码中shared文件夹和separated文件夹的区别:
+shared文件夹：使用一个共享的actor-critic网络
+separated文件夹：每个agent使用一个独立的actor-critic网络 
+这里是实现的separated的形式
 
-注：这里MAPPO_max 为复刻的论文代码
-MAPPO为不加任何trick的代码
+注：这里MAPPO 为复刻的论文代码
+MAPPO_simple为不加任何trick的代码
+
+疑问：
+从代码：https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/runner/separated/mpe_runner.py#L126
+（action_env = np.squeeze(np.eye(self.envs.action_space[agent_id].n)[action], 1)）
+及 https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/envs/mpe/environment.py#L206
+（if action[0] == 1:）
+这里两处矛盾 推出原论文作者并没有使用mpe的离散环境做实验，
+且此代码实现效果和https://blog.csdn.net/onlyyyyyyee/article/details/139331501类似 所以推测复现代码实现并无错误。  
+
+此代码的log_std 使用对角高斯函数的效果好，此与MASAC不同
 '''
 
 
@@ -115,7 +129,8 @@ class Actor(nn.Module):
         self.l1 = nn.Linear(obs_dim, hidden_1)
         self.l2 = nn.Linear(hidden_1, hidden_2)
         self.mean_layer = nn.Linear(hidden_2, action_dim)
-        self.log_std = nn.Parameter(torch.zeros(1, action_dim)) # 于PPO.py的方法一致：对角高斯函数
+        self.log_std = nn.Parameter(torch.zeros(1, action_dim)) # 与PPO.py的方法一致：对角高斯函数
+        #self.log_std_layer = nn.Linear(hidden_2, action_dim) # 式2
 
         self.trick = trick
         # 使用 orthogonal_init
@@ -137,6 +152,7 @@ class Actor(nn.Module):
         mean = torch.tanh(self.mean_layer(x))  # 使得mean在-1,1之间
 
         log_std = self.log_std.expand_as(mean)  # 使得log_std与mean维度相同 输出log_std以确保std=exp(log_std)>0
+        #log_std = self.log_std_layer(x) # 式2
         log_std = torch.clamp(log_std, -20, 2) # exp(-20) - exp(2) 等于 2e-9 - 7.4，确保std在合理范围内
         std = torch.exp(log_std)
 
@@ -248,7 +264,6 @@ class MAPPO:
         print('actor_type:continue') if self.is_continue else print('actor_type:discrete')
 
         self.horizon = int(horizon)
-        self.agent_x = list(self.agents.keys())[0] #sample 用
 
         self.trick = trick
 
@@ -408,20 +423,20 @@ class MAPPO:
 
 ## 第三部分 mian 函数
 ## 环境配置
-def get_env(env_name,env_agent_n = None):
+def get_env(env_name,env_agent_n = None,continuous_actions=True):
     # 动态导入环境
     module = importlib.import_module(f'pettingzoo.mpe.{env_name}')
     print('env_agent_n or num_good:',env_agent_n) 
     if env_agent_n is None: #默认环境
-        env = module.parallel_env(max_cycles=25, continuous_actions=True)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions)
     elif env_name == 'simple_spread_v3' or 'simple_adversary_v3': 
-        env = module.parallel_env(max_cycles=25, continuous_actions=True, N = env_agent_n)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions, N = env_agent_n)
     elif env_name == 'simple_tag_v3': 
-        env = module.parallel_env(max_cycles=25, continuous_actions=True, num_good= env_agent_n, num_adversaries=3)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions, num_good= env_agent_n, num_adversaries=3)
     elif env_name == 'simple_world_comm_v3':
-        env = module.parallel_env(max_cycles=25, continuous_actions=True, num_good= env_agent_n, num_adversaries=4)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions, num_good= env_agent_n, num_adversaries=4)
     env.reset()
-    dim_info = {} # dict{agent_id:[obs_dim,action_dim]}
+    dim_info = {}
     for agent_id in env.agents:
         dim_info[agent_id] = []
         if isinstance(env.observation_space(agent_id), gym.spaces.Box):
@@ -432,8 +447,10 @@ def get_env(env_name,env_agent_n = None):
             dim_info[agent_id].append(env.action_space(agent_id).shape[0])
         else:
             dim_info[agent_id].append(env.action_space(agent_id).n)
-
-    return env,dim_info, 1, True # pettingzoo.mpe 环境中，max_action均为1 , 选取连续环境is_continue = True
+    if continuous_actions:
+        return env,dim_info, 1, True # pettingzoo.mpe 环境中，max_action均为1 , 选取连续环境is_continue = True
+    else:
+        return env,dim_info, None, False
 
 ## make_dir 
 def make_dir(env_name,policy_name = 'DQN',trick = None):
@@ -442,7 +459,7 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     os.makedirs(env_dir) if not os.path.exists(env_dir) else None
     print('trick:',trick)
     # 确定前缀
-    if trick is None or not any(trick.values()) or policy_name =='MAPPO_max':
+    if trick is None or not any(trick.values()) or policy_name =='MAPPO':
         prefix = policy_name + '_'
     else:
         prefix = policy_name + '_'
@@ -460,17 +477,18 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
 ''' 
 环境见:simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
 具体见:https://pettingzoo.farama.org/environments/mpe
-注意：环境中N个智能体的设置
+注意：环境中N个智能体的设置   
 '''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
     # 共有参数
-    parser.add_argument("--seed", type=int, default=100) # 0 10 100
-    parser.add_argument("--max_episodes", type=int, default=int(600))
-    parser.add_argument("--save_freq", type=int, default=int(600//4))
+    parser.add_argument("--seed", type=int, default=100) # 0 10 100  
+    parser.add_argument("--max_episodes", type=int, default=int(5000))
+    parser.add_argument("--save_freq", type=int, default=int(5000//4))
     parser.add_argument("--start_steps", type=int, default=0) # 满足此开始更新 此算法不用
     parser.add_argument("--random_steps", type=int, default=0)  # 满足此开始自己探索
     parser.add_argument("--learn_steps_interval", type=int, default=0) # 这个算法不方便用
@@ -481,16 +499,16 @@ if __name__ == '__main__':
     parser.add_argument("--actor_lr", type=float, default=1e-3)
     parser.add_argument("--critic_lr", type=float, default=1e-3)
     # PPO独有参数
-    parser.add_argument("--horizon", type=int, default=512) # 60
+    parser.add_argument("--horizon", type=int, default=256) # 
     parser.add_argument("--clip_param", type=float, default=0.2)
     parser.add_argument("--K_epochs", type=int, default=15) # 15 # 困难任务建议设置为5
     parser.add_argument("--entropy_coefficient", type=float, default=0.01)
-    parser.add_argument("--minibatch_size", type=int, default=512)  # 30 ### 原论文意思是与horizon相等 
+    parser.add_argument("--minibatch_size", type=int, default=256)  
     parser.add_argument("--lmbda", type=float, default=0.95) # GAE参数
     ## mappo 参数
     parser.add_argument("--huber_delta", type=float, default=10.0) # huber_loss参数
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MAPPO')
+    parser.add_argument("--policy_name", type=str, default='MAPPO_simple')
     parser.add_argument("--trick", type=dict, default={'adv_norm':False,
                                                         'ObsNorm':False,
                                                         'reward_norm':False,'reward_scaling':False,    # or
@@ -507,17 +525,16 @@ if __name__ == '__main__':
     if args.trick['reward_norm'] and args.trick['reward_scaling']:
         raise ValueError("reward_norm 和 reward_scaling 不能同时为 True")
     
-    if  args.policy_name == 'MAPPO_max' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay'])) :
-        args.policy_name = 'MAPPO_max'
+    if  args.policy_name == 'MAPPO' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay'])) :
+        args.policy_name = 'MAPPO'
         for key in args.trick.keys():
             if key not in ['reward_norm','lr_decay']:
                 args.trick[key] = True
             else:
                 args.trick[key] = False
     
-            
-    if args.policy_name == 'MAPPO' or (not any(args.trick.values())) : # if all(value is False for value in args.trick.values()):
-        args.policy_name = 'MAPPO'
+    if args.policy_name == 'MAPPO_simple' or (not any(args.trick.values())) : # if all(value is False for value in args.trick.values()):
+        args.policy_name = 'MAPPO_simple'
         for key in args.trick.keys():
             args.trick[key] = False
 
@@ -526,7 +543,7 @@ if __name__ == '__main__':
     print('Algorithm:',args.policy_name)
 
     ## 环境配置
-    env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N)
+    env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N, continuous_actions = args.continuous_actions)
     print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')
 
     ## 随机数种子

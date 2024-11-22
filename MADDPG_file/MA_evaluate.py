@@ -48,7 +48,7 @@ def plot_evaluate(evaluate_return,goal_return,model_dir,smooth_rate=0.9):
     # 保存
     plt.savefig(os.path.join(model_dir,"evaluate.png"))
 
-def render(env_name,policy,model_dir,env_agent_n,trick=None,supplement=None):
+def render(env_name,policy,model_dir,env_agent_n,args):
     '''随机挑选一个episode并保存gif'''
     # 动态导入环境
     module = importlib.import_module(f'pettingzoo.mpe.{env_name}')
@@ -177,5 +177,5 @@ if __name__ == "__main__":
     
     # save gif
     if args.save_gif:
-        render(args.env_name,policy,env_agent_n = args.N,model_dir = model_dir,supplement=args.supplement)
+        render(args.env_name,policy,env_agent_n = args.N,model_dir = model_dir,args=args)
 

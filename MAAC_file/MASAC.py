@@ -18,20 +18,32 @@ import argparse
 from torch.utils.tensorboard import SummaryWriter
 import time
 
+'''
+这里实现了8种MASAC的写法，
+与论文mSAC不同：mSAC 还加入了分解值算法和反事实曲线 mSAC论文链接：https://arxiv.org/pdf/2104.06655
+
+实验发现：效果 
+random_steps = 0时 > random_steps = 500
+log_std 法1 > log_std 法2 见note中结果
+这里选用上述两者较好的结果
+'''
+
 ## 第一部分：定义Agent类
 class Actor(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_1=128, hidden_2=128):
         super(Actor, self).__init__()
         self.l1 = nn.Linear(obs_dim, hidden_1)
         self.l2 = nn.Linear(hidden_1, hidden_2)
-        self.mean_layer = nn.Linear(hidden_2, action_dim)
-        self.log_std_layer = nn.Linear(hidden_2, action_dim)
+        self.mean_layer = nn.Linear(hidden_2, action_dim) 
+        self.log_std_layer = nn.Linear(hidden_2, action_dim) # 此方法可改为MAPPO中只训练一个std的方法  ## log_std 法1
+        ##self.log_std = nn.Parameter(torch.zeros(1, action_dim)) # 与PPO.py的方法一致：对角高斯函数  ## log_std 法2
 
     def forward(self, obs, deterministic=False, with_logprob=True):
         x = F.relu(self.l1(obs))
         x = F.relu(self.l2(x))
         mean = self.mean_layer(x)
-        log_std = self.log_std_layer(x)  # 我们输出log_std以确保std=exp(log_std)>0
+        log_std = self.log_std_layer(x)  # 我们输出log_std以确保std=exp(log_std)>0 ## log_std 法1
+        ##log_std = self.log_std.expand_as(mean)  ## log_std 法2
         log_std = torch.clamp(log_std, -20, 2)
         std = torch.exp(log_std)
 
@@ -110,11 +122,14 @@ class Agent:
 
 ## 第二部分：定义DQN算法类
 class Alpha:
-    def __init__(self, action_dim, alpha_lr= 0.0001, alpha = 0.2,requires_grad = False):
+    def __init__(self, action_dim, alpha_lr= 0.0001, alpha = 0.01,requires_grad = False,is_continue = True):
 
         self.log_alpha = torch.tensor(np.log(alpha),dtype = torch.float32, requires_grad=requires_grad) # We learn log_alpha instead of alpha to ensure that alpha=exp(log_alpha)>0
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=alpha_lr)
-        self.target_entropy = -action_dim # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2) as given in the paper #
+        if is_continue:
+            self.target_entropy = -action_dim # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2) as given in the paper(SAC) 参考原sac论文
+        else:
+            self.target_entropy =  0.6 * (-torch.log(torch.tensor(1.0 / action_dim))) # 参考:https://zhuanlan.zhihu.com/p/566722896
         self.alpha = self.log_alpha.exp() # 更新actor时无detach会报错,是因为这里只有一个计算图 
 
     def update_alpha(self, loss):
@@ -138,9 +153,9 @@ class MASAC: #先无attention 再加入
 
         for agent_id, (obs_dim, action_dim) in dim_info.items():
             if self.adaptive_alpha:
-                self.alphas[agent_id] = Alpha(action_dim,alpha = 0.01, requires_grad=True) # Alpha(action_dim).alpha 才是值
+                self.alphas[agent_id] = Alpha(action_dim,alpha = 0.01, requires_grad=True, is_continue= is_continue) # Alpha(action_dim).alpha 才是值
             else:
-                self.alphas[agent_id] = Alpha(action_dim,alpha = 0.2) # 即 0.2
+                self.alphas[agent_id] = Alpha(action_dim,alpha = 0.1,requires_grad=False, is_continue= is_continue) 
         '''
         更新critic时 熵的采用方式
         '0' (参考github)中的方式, https://github.com/ffelten/MASAC/blob/main/masac/masac.py#L285  
@@ -262,20 +277,19 @@ class MASAC: #先无attention 再加入
             soft_update(agent.critic_target, agent.critic, tau)
 
     def save(self, model_path):
-        ploicy_name = 'MAAC' if self.attention else 'MASAC'
         torch.save(
             {name: agent.actor.state_dict() for name, agent in self.agents.items()},
-            os.path.join(model_path, f'{ploicy_name}.pth')
+            os.path.join(model_path, f'MASAC.pth')
         )
 
     ## 加载模型
     @staticmethod 
     def load(dim_info, is_continue, model_dir):
         policy = MASAC(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
-        ploicy_name = 'MAAC' if policy.attention else 'MASAC'
-        torch.load(
-            os.path.join(model_dir, f'{ploicy_name}.pth')
-        )
+        data = torch.load(os.path.join(model_dir, f'MASAC.pth'))
+        for agent_id, agent in policy.agents.items():
+            agent.actor.load_state_dict(data[agent_id])
+
         return policy
     
 
@@ -329,21 +343,22 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     os.makedirs(model_dir)
     return model_dir
 
-''' 环境见
-simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
-https://pettingzoo.farama.org/environments/mpe
+''' 
+环境见:simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
+具体见:https://pettingzoo.farama.org/environments/mpe
+注意：环境中N个智能体的设置
 '''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--max_action", type=float, default=None)
     # 共有参数
-    parser.add_argument("--seed", type=int, default=0) # 0 10 100
+    parser.add_argument("--seed", type=int, default=100) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(600))
+    parser.add_argument("--save_freq", type=int, default=int(600//4))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
-    parser.add_argument("--random_steps", type=int, default=500)  #dqn 无此参数 满足此开始自己探索
+    parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数 满足此开始自己探索
     parser.add_argument("--learn_steps_interval", type=int, default=1)
     # 训练参数
     parser.add_argument("--gamma", type=float, default=0.95)
@@ -357,23 +372,35 @@ if __name__ == '__main__':
     # trick参数
     parser.add_argument("--policy_name", type=str, default='MASAC')
     parser.add_argument("--trick", type=dict, default=None)  
+    # device参数   
+    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
 
     args = parser.parse_args()
 
+    print(args)
+    print('-' * 50)
+    print('Algorithm:',args.policy_name)
+
     ## 环境配置
     env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N)
-    max_action = max_action if max_action is not None else args.max_action
+    print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')
 
     ## 随机数种子
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    ### cuda
+    torch.cuda.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print('Random Seed:',args.seed)
 
     ## 保存model文件夹
     model_dir = make_dir(args.env_name,policy_name = args.policy_name,trick=args.trick)
+    print(f'model_dir: {model_dir}')
     writer = SummaryWriter(model_dir)
 
-    ##
-    device = torch.device('cpu')
+    ## device参数
+    device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
     policy = MASAC(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick)
@@ -386,6 +413,8 @@ if __name__ == '__main__':
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
     obs,info = env.reset(seed=args.seed)
+    {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
+    
     while episode_num < args.max_episodes:
         step +=1
 
@@ -421,6 +450,10 @@ if __name__ == '__main__':
         # 满足step,更新网络
         if step > args.start_steps and step % args.learn_steps_interval == 0:
             policy.learn(args.batch_size, args.gamma, args.tau)
+        
+        # 保存模型
+        if episode_num % args.save_freq == 0:
+            policy.save(model_dir)
 
     print('total_time:',time.time()-time_)
     policy.save(model_dir)

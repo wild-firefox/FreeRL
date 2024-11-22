@@ -48,7 +48,7 @@ def plot_evaluate(evaluate_return,goal_return,model_dir,smooth_rate=0.9):
     # 保存
     plt.savefig(os.path.join(model_dir,"evaluate.png"))
 
-def render(env_name,policy,model_dir,env_agent_n,trick=None,supplement=None):
+def render(env_name,policy,model_dir,env_agent_n,args):
     '''随机挑选一个episode并保存gif'''
     # 动态导入环境
     module = importlib.import_module(f'pettingzoo.mpe.{env_name}')
@@ -97,16 +97,17 @@ if __name__ == "__main__":
     # 评估模型位置 results/env_name/algorithm_trick_n
     parser.add_argument("--results_dir", type=str, default=None)
     parser.add_argument("--env_name", type=str, default="simple_spread_v3")
-    parser.add_argument("--folder_name", type=str, default="MAPPO_1") # 模型文件夹名 model名 + trick名
+    parser.add_argument("--folder_name", type=str, default="MAPPO_simple_1") # 模型文件夹名 model名 + trick名
     # 环境参数
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--continuous_actions", type=bool, default=True) #
     # 种子和评估次数设置
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--max_episodes", type=int, default=100) #
     ## 是否保存gif
     parser.add_argument("--save_gif", type=bool, default=True)
     # 注意要和训练时一致
-    parser.add_argument("--policy_name", type=str, default='MAPPO')   
+    parser.add_argument("--policy_name", type=str, default='MAPPO_simple')   
     ## trick和folder_name一致 (尽管有些trick在评估时不会用到,但不少是改变模型结构的会用到)                           
     parser.add_argument("--trick", type=dict, default={'adv_norm':False,
                                                     'ObsNorm':False,
@@ -122,23 +123,23 @@ if __name__ == "__main__":
     if args.trick['reward_norm'] and args.trick['reward_scaling']:
         raise ValueError("reward_norm 和 reward_scaling 不能同时为 True")
     
-    if  args.policy_name == 'MAPPO_max' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay'])) :
-        args.policy_name = 'MAPPO_max'
+    if  args.policy_name == 'MAPPO' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay'])) :
+        args.policy_name = 'MAPPO'
         for key in args.trick.keys():
             if key not in ['reward_norm','lr_decay']:
                 args.trick[key] = True
             else:
                 args.trick[key] = False
     
-    if args.policy_name == 'MAPPO' or (not any(args.trick.values())) : # if all(value is False for value in args.trick.values()):
-        args.policy_name = 'MAPPO'
+    if args.policy_name == 'MAPPO_simple' or (not any(args.trick.values())) : # if all(value is False for value in args.trick.values()):
+        args.policy_name = 'MAPPO_simple'
         for key in args.trick.keys():
             args.trick[key] = False
     print(args)
     print('Algorithm:',args.policy_name)
 
     ## 环境配置
-    env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N)
+    env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N, continuous_actions = args.continuous_actions)
     print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')
     
     ## 随机数种子(cpu)
@@ -191,5 +192,5 @@ if __name__ == "__main__":
     
     # save gif
     if args.save_gif:
-        render(args.env_name,policy,env_agent_n = args.N,model_dir = model_dir)
+        render(args.env_name,policy,env_agent_n = args.N,model_dir = model_dir,args=args)
 

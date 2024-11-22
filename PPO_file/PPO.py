@@ -327,7 +327,7 @@ reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.p
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="CartPole-v1") 
+    parser.add_argument("--env_name", type = str,default="BipedalWalker-v3") 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))

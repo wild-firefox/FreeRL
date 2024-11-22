@@ -1,5 +1,5 @@
 5个智能体的simple_spread_v3环境下  
-上两个为MASAC，下两个为MAAC   
+上两个为MASAC，下两个为MAAC(注意此代码为失败弃用的continue版本MAAC.py)   
 感觉MASAC 明显比MAAC 好 且用时短  (此时MAAC的critic由q值更新 actor由adv更新)  
 猜测attention机制无用，coma的优势值有用。(不加上优势值更新，效果还要拉跨)  
 ![alt text](image-1.png)
