@@ -148,7 +148,7 @@ class Actor(nn.Module):
         x = F.relu(self.l2(x))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
-        mean = self.mean_layer(x)
+
         mean = torch.tanh(self.mean_layer(x))  # 使得mean在-1,1之间
 
         log_std = self.log_std.expand_as(mean)  # 使得log_std与mean维度相同 输出log_std以确保std=exp(log_std)>0
@@ -330,7 +330,7 @@ class MAPPO:
             obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
             # 计算GAE
             with torch.no_grad():  # adv and v_target have no gradient
-                adv = torch.zeros(self.horizon,dtype=torch.float32)
+                adv = np.zeros(self.horizon)
                 gae = 0
                 vs = self.agents[agent_id].critic(obs.values())
                 vs_ = self.agents[agent_id].critic(next_obs.values())
@@ -340,12 +340,12 @@ class MAPPO:
                 for i in reversed(range(self.horizon)):
                     gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
                     adv[i] = gae
-                adv = adv.reshape(-1, 1).to(self.device) ## cuda
+                adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
                 v_target = adv + vs  
                 if self.trick['adv_norm']:  
                     adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
+                  
 
-            
             # Optimize policy for K epochs:
             for _ in range(K_epochs): 
                 # 随机打乱样本 并 生成小批量
@@ -357,14 +357,14 @@ class MAPPO:
                         mean, std = self.agents[agent_id].actor(obs[agent_id][index])
                         dist_now = Normal(mean, std)
                         dist_entropy = dist_now.entropy().sum(dim = 1, keepdim=True)  # mini_batch_size x action_dim -> mini_batch_size x 1
-                        action_log_pi_now = dist_now.log_prob(action[agent_id][index]) # mini_batch_size x 1
+                        action_log_pi_now = dist_now.log_prob(action[agent_id][index]) # mini_batch_size x action_dim
                     else:
                         dist_now = Categorical(probs=self.agents[agent_id].actor(obs[agent_id][index]))
                         dist_entropy = dist_now.entropy().reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
                         action_log_pi_now = dist_now.log_prob(action[agent_id][index].reshape(-1)).reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
 
                     ratios = torch.exp(action_log_pi_now.sum(dim = 1, keepdim=True) - action_log_pi[agent_id][index].sum(dim = 1, keepdim=True))  # shape(mini_batch_size X 1)
-                    surr1 = ratios * adv[index]  
+                    surr1 = ratios * adv[index]   # mini_batch_size x 1
                     surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
                     actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()
                     agent.update_actor(actor_loss)
@@ -484,7 +484,7 @@ if __name__ == '__main__':
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--continuous_actions", type=bool, default=False) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(5000))
@@ -518,7 +518,7 @@ if __name__ == '__main__':
                                                        'LayerNorm':False,'feature_norm':False,
                                                        })  
     # device参数   
-    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
+    parser.add_argument("--device", type=str, default='cuda') # cpu/cuda
 
     args = parser.parse_args()
     # 检查 reward_norm 和 reward_scaling 的值
@@ -596,7 +596,7 @@ if __name__ == '__main__':
         else:
             action_ = action
             
-
+        print('action:',action)
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         if args.trick['ObsNorm']:

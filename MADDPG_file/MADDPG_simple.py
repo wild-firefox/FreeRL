@@ -358,7 +358,8 @@ if __name__ == '__main__':
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
         done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
-        episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
+        for agent_id,r in reward.items():
+            episode_reward[agent_id] += r
         obs = next_obs
         
         # episode 结束 ### 在pettingzoo中,env.agents 为空时  一个episode结束
@@ -370,9 +371,9 @@ if __name__ == '__main__':
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
-            for agent_id in env_agents:
-                writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
-                train_return[agent_id].append(episode_reward[agent_id])
+            for agent_id , r in episode_reward.items():
+                writer.add_scalar(f'reward_{agent_id}', r, episode_num + 1)
+                train_return[agent_id].append(r)
 
             episode_num += 1
             obs,info = env.reset(seed=args.seed)

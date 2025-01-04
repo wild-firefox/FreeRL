@@ -258,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小 # 256 (64 for MountainCarContinuous-v0)
     # DDPG 独有参数 noise
     ## gauss noise
-    parser.add_argument("--gauss_sigma", type=float, default=1) # 高斯标准差 # 0.1 (1 for MountainCarContinuous-v0 )
+    parser.add_argument("--gauss_sigma", type=float, default=0.1) # 高斯标准差 # 0.1 (1 for MountainCarContinuous-v0 )
     parser.add_argument("--gauss_scale", type=float, default=1)
     parser.add_argument("--gauss_init_scale", type=float, default=None) # 若不设置衰减，则设置成None
     parser.add_argument("--gauss_final_scale", type=float, default=0.0)

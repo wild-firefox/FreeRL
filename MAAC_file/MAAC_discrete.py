@@ -163,7 +163,7 @@ class MAAC: #先无attention 再加入对比
             else:
                 self.buffers[agent_id] = Buffer(buffer_size, obs_dim, act_dim = action_dim if is_continue else 1, device = 'cpu')
             
-        self.adaptive_alpha = True
+        self.adaptive_alpha = False
         self.alphas = {} 
 
         for agent_id, (obs_dim, action_dim) in dim_info.items():

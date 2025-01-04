@@ -9,4 +9,5 @@ DDPG_simple_add_discrete.py (加入离散动作版)
 ```
 DDPG_simple_add_discrete_gumbel(lose).py (使用gumbel失败版)
 misc(lose).py
+DDPG_simple_try_HER.py(效果不好，复现未成功)
 ```

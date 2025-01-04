@@ -49,8 +49,6 @@ critic_loss =  (V - V_target) ** 2
 5.orthogonal_init ：防止在训练开始时出现梯度消失、梯度爆炸等问题
 6.adam_eps : 提高数值稳定性
 7.tanh :对于性能有一定提升 --《PPO-Implementation matters in deep policy gradients A case study on PPO and TRPO》
-## 2024.11.18 新增
-8.reward centering :解决continue problem中reward的分布不稳定问题 -- 参考：https://github.com/abhisheknaik96/continuing-rl-exps 中 Discounted TD(lambda) with reward centering
 附加:
 Actor_Beta分布
 
@@ -216,43 +214,6 @@ class PPO:
         self.actor_dist = {'Beta':True if beta else False} # 默认actor拟合Gaussian函数
         print('actor_dist:Beta') if self.actor_dist['Beta'] else print('actor_dist:Gaussian')
         
-        self.trick = trick
-        if self.trick['reward_centering']: 
-            ''' use discounted TD + reward_centering (value based)
-            论文使用两个优化代码方式
-            1.unbiased_trick  # 此trick 可视为独立的一个trick 
-            2.先计算TD误差，然后更新奖励率估计，再使用新的奖励率估计重新计算TD误差，最后更新价值估计来更快地传播对平均奖励估计的更改。
-            参考：论文代码：https://github.com/abhisheknaik96/continuing-rl-exps/blob/main/agents/control_agents_deep.py
-            '''
-            ## 论文中 alpha 为学习率:更新value权重的步长 
-            self.unbiased_trick = False
-            assert sum([self.unbiased_trick,self.trick['lr_decay']]) <= 1 ,'reward_centering的unbiased_trick 与 lr_decay 不能同时为True'
-            
-            self.eta = 2#1 #0.0625#0.25#0.75 #0.5# 0.25 1#0.1
-            print(self.eta  )
-            self.alpha_init = critic_lr
-            
-            if self.unbiased_trick:
-                self.o = self.alpha_init
-                self.alpha = self.alpha_init / self.o
-            else:
-                self.alpha = self.alpha_init
-
-            ## 回代
-            critic_lr = self.alpha
-
-            self.beta_init = self.eta * self.alpha_init
-            if self.unbiased_trick:
-                self.o_b = self.beta_init if self.beta_init != 0 else 1
-                self.beta = self.beta_init / self.o_b
-            else:
-                self.beta = self.beta_init
-
-            self.avg_reward_init = 0
-            self.avg_reward = torch.tensor(self.avg_reward_init, requires_grad=False, dtype=torch.float) #self.avg_reward_init
-
-        
-        
         obs_dim, action_dim = dim_info
         self.agent = Agent(obs_dim, action_dim,  actor_lr, critic_lr, is_continue, device, trick, actor_dist=self.actor_dist)
         self.buffer = Buffer_for_PPO(horizon, obs_dim, act_dim = action_dim if is_continue else 1, device = device) #Buffer中说明了act_dim和action_dim的区别
@@ -262,6 +223,7 @@ class PPO:
 
         self.horizon = int(horizon)
 
+        self.trick = trick
         if self.trick['Batch_ObsNorm']:
             self.batch_size_obs_norm = Normalization_batch_size(shape = obs_dim, device = device)
         
@@ -337,37 +299,18 @@ class PPO:
             next_obs = self.batch_size_obs_norm(next_obs,update=False) #只对输入obs进行更新
         # 计算GAE
         with torch.no_grad():  # adv and v_target have no gradient
-            adv = torch.zeros(self.horizon,dtype=torch.float32)
+            adv = np.zeros(self.horizon,dtype=torch.float32)
             gae = 0
             vs = self.agent.critic(obs)
             vs_ = self.agent.critic(next_obs)
-            if self.trick['reward_centering']:
-                target = reward - self.avg_reward + gamma * (1.0 - done) * vs_
-            else:
-                target = reward + gamma * (1.0 - done) * vs_
-            td_delta = target - vs
-            #print('1',td_delta)
-            if self.trick['reward_centering']:
-                #print(reward)
-                avg_rew_delta =  (reward - self.avg_reward)
-                ## update avg_reward
-                old_avg_reward = self.avg_reward
-                self.avg_reward += self.beta * avg_rew_delta.mean() # avg_rew_delta
-                ## re compute td_delta  
-                # target = target + (old_avg_reward - self.avg_reward)
-                # #print((old_avg_reward - self.avg_reward))
-                # updated_delta = target - vs
-                # td_delta = updated_delta
-            #print('2',td_delta)
+            td_delta = reward + gamma * (1.0 - done) * vs_ - vs
             td_delta = td_delta.reshape(-1).cpu().detach().numpy()
             adv_dones = adv_dones.reshape(-1).cpu().detach().numpy()
             for i in reversed(range(self.horizon)):
                 gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
                 adv[i] = gae
-            adv = adv.reshape(-1, 1).to(self.device) ## cuda
+            adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
             v_target = adv + vs  
-            # if self.trick['reward_centering']:
-            #     v_target = v_target + (old_avg_reward - self.avg_reward)
             if self.trick['adv_norm']:  
                 adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
 
@@ -397,7 +340,7 @@ class PPO:
                 Only calculate the gradient of 'a_logprob_now' in ratios
                 '''
                 ratios = torch.exp(action_log_pi_now.sum(dim = 1, keepdim=True) - action_log_pi[index].sum(dim = 1, keepdim=True))  # shape(mini_batch_size X 1)
-                surr1 = ratios * adv[index]     
+                surr1 = ratios * adv[index]  
                 surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
                 actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()  
                 self.agent.update_actor(actor_loss)
@@ -405,14 +348,10 @@ class PPO:
                 # 再更新critic
                 v_s = self.agent.critic(obs[index])
                 critic_loss = F.mse_loss(v_target[index], v_s)
-                # if self.trick['reward_centering']:
-                #     self.avg_reward += self.beta * torch.mean(v_target[index]-v_s)
                 self.agent.update_critic(critic_loss)
         
         ## 清空buffer
         self.buffer.clear()
-        if self.trick['reward_centering']:
-            self.reward_centering_update()
 
     
     def lr_decay(self, episode_num,max_episodes):
@@ -422,16 +361,6 @@ class PPO:
             p['lr'] = lr_a_now
         for p in self.agent.critic_optimizer.param_groups:
             p['lr'] = lr_c_now
-    
-    def reward_centering_update(self):
-        if self.unbiased_trick:
-            # self.o = self.o  + self.alpha_init * (1 - self.o)
-            # self.alpha = self.alpha_init / self.o
-            # for p in self.agent.critic_optimizer.param_groups:
-            #     p['lr'] = self.alpha
-        
-            self.o_b = self.o_b + self.beta_init * (1 - self.o_b)
-            self.beta = self.beta_init / self.o_b
     
     ## 保存模型
     def save(self, model_dir):
@@ -506,9 +435,9 @@ reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.p
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="Pendulum-v1") 
+    parser.add_argument("--env_name", type = str,default="CartPole-v1") 
     # 共有参数
-    parser.add_argument("--seed", type=int, default=10) # 0 10 100
+    parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))
     parser.add_argument("--save_freq", type=int, default=int(500//4))
     parser.add_argument("--start_steps", type=int, default=0) #ppo无此参数
@@ -522,7 +451,7 @@ if __name__ == '__main__':
     parser.add_argument("--actor_lr", type=float, default=1e-3)
     parser.add_argument("--critic_lr", type=float, default=1e-3)
     # PPO独有参数
-    parser.add_argument("--horizon", type=int, default=2048) 
+    parser.add_argument("--horizon", type=int, default=2048)
     parser.add_argument("--clip_param", type=float, default=0.2)
     parser.add_argument("--K_epochs", type=int, default=10)
     parser.add_argument("--entropy_coefficient", type=float, default=0.01)
@@ -532,21 +461,17 @@ if __name__ == '__main__':
     parser.add_argument("--policy_name", type=str, default='PPO')
     parser.add_argument("--trick", type=dict, default={'adv_norm':False,
                                                        'ObsNorm':False,'Batch_ObsNorm':False,  # or 两者择1
-                                                       'reward_norm':False, 'reward_scaling':False, 'reward_centering':True , # or 
-                                                       'lr_decay':False,'orthogonal_init':False,'adam_eps':False,'tanh':False
-                                                       })
+                                                       'reward_norm':False, 'reward_scaling':False, # or 
+                                                       'lr_decay':False,'orthogonal_init':False,'adam_eps':False,'tanh':False})
     parser.add_argument("--beta", type=bool, default=False)
     # device参数
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
     args = parser.parse_args()
-    # 检查 reward_norm、reward_scaling 和 reward_centering 中最多只有一个为 True
-    reward_options = [args.trick['reward_norm'], args.trick['reward_scaling'], args.trick['reward_centering']]
-    if sum(reward_options) > 1:
-        raise ValueError("reward_norm、reward_scaling 和 reward_centering 这三个选项中最多只能有一个为 True")
-
+    # 检查 reward_norm 和 reward_scaling 的值
+    if args.trick['reward_norm'] and args.trick['reward_scaling']:
+        raise ValueError("reward_norm 和 reward_scaling 不能同时为 True")
     if args.trick['ObsNorm'] and args.trick['Batch_ObsNorm']:
         raise ValueError("ObsNorm 和 Batch_ObsNorm 不能同时为 True")
-
     
     print(args)
     print('-' * 50)
@@ -621,8 +546,7 @@ if __name__ == '__main__':
             policy.add(obs, action, reward, next_obs, done_bool, action_log_pi,done)
         episode_reward += reward
         obs = next_obs
-        # if args.trick['reward_centering']:
-        #     policy.reward_centering_update()
+        
         # episode 结束
         if done:
             ## 显示
@@ -644,7 +568,6 @@ if __name__ == '__main__':
             policy.learn(args.minibatch_size, args.gamma, args.lmbda, args.clip_param, args.K_epochs, args.entropy_coefficient)
             if args.trick['lr_decay']:
                 policy.lr_decay(episode_num,max_episodes=args.max_episodes)
-
         
         # 保存模型
         if episode_num % args.save_freq == 0:

@@ -21,6 +21,7 @@ python 3.11.9
 torch 2.3.1+cu121
 gymnasium[all] 0.29.1
 pygame 0.25.2 # 这个版本和gymnasium[all]0.29.1兼容
+pettingzoo 1.24.3
 ```
 ## 效果
 用DQN算法在LunarLander-v2环境下训练500个轮次的3个seed的效果：线为均值，阴影为方差

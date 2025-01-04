@@ -195,7 +195,7 @@ class PPO:
         obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.buffer.all()
         # 计算GAE
         with torch.no_grad():  # adv and v_target have no gradient
-            adv = torch.zeros(self.horizon,dtype=torch.float32)
+            adv = np.zeros(self.horizon)
             gae = 0
             vs = self.agent.critic(obs)
             vs_ = self.agent.critic(next_obs)
@@ -205,7 +205,7 @@ class PPO:
             for i in reversed(range(self.horizon)):
                 gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
                 adv[i] = gae
-            adv = adv.reshape(-1, 1).to(self.device) ## cuda
+            adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
             v_target = adv + vs  
             # if self.trick['adv_norm']:  # Trick :advantage normalization
             #     adv = ((adv - adv.mean()) / (adv.std() + 1e-5)) 
@@ -228,7 +228,7 @@ class PPO:
                     mean, std = self.agent.actor(obs[index])
                     dist_now = Normal(mean, std)
                     dist_entropy = dist_now.entropy().sum(dim = 1, keepdim=True)  # mini_batch_size x action_dim -> mini_batch_size x 1
-                    action_log_pi_now = dist_now.log_prob(action[index]) # mini_batch_size x 1
+                    action_log_pi_now = dist_now.log_prob(action[index]) # mini_batch_size x action_dim 
                 else:
                     dist_now = Categorical(probs=self.agent.actor(obs[index]))
                     dist_entropy = dist_now.entropy().reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
@@ -327,7 +327,7 @@ reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.p
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="BipedalWalker-v3") 
+    parser.add_argument("--env_name", type = str,default="CartPole-v1") 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(500))

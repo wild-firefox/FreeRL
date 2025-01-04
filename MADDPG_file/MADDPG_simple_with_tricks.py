@@ -162,10 +162,12 @@ class MADDPG:
         indices = np.random.choice(total_size, batch_size, replace=False)
 
         obs, action, reward, next_obs, done = {}, {}, {}, {}, {}
+        next_action = {}
         for agent_id, buffer in self.buffers.items():
             obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id] = buffer.sample(indices)
+            next_action[agent_id] = self.agents[agent_id].actor_target(next_obs[agent_id])
 
-        return obs, action, reward, next_obs, done #包含所有智能体的数据
+        return obs, action, reward, next_obs, done ,next_action#包含所有智能体的数据
     
     ## DDPG算法相关
     '''论文中提出两种方法更新actor 最终论文取了方式0作为伪代码 论文中比较使用方式0,1 发现方式0的学习曲线效果与方式1比稍差略微，但KL散度差于方式1 
@@ -177,11 +179,7 @@ class MADDPG:
         # 多智能体特有-- 集中式训练critic:计算next_q值时,要用到所有智能体next状态和动作
         for agent_id, agent in self.agents.items():
             ## 更新前准备
-            obs, action, reward, next_obs, done = self.sample(batch_size) # 必须放for里，否则报二次传播错，原因是原来的数据在计算图中已经被释放了
-            next_action = {}
-            for agent_id_, agent_ in self.agents.items():
-                next_action_i = agent_.actor_target(next_obs[agent_id_])
-                next_action[agent_id_] = next_action_i
+            obs, action, reward, next_obs, done , next_action = self.sample(batch_size) # 必须放for里，否则报二次传播错，原因是原来的数据在计算图中已经被释放了
             next_target_Q = agent.critic_target(next_obs.values(), next_action.values())
             
             # 先更新critic
@@ -310,7 +308,7 @@ if __name__ == '__main__':
     parser.add_argument("--policy_name", type=str, default='MADDPG_simple')
     parser.add_argument("--trick", type=dict, default={'ATT':True}) 
     # device参数              
-    parser.add_argument("--device", type=str, default='cuda') # cpu/cuda
+    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
 
     args = parser.parse_args()
     print(args)
@@ -371,7 +369,8 @@ if __name__ == '__main__':
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
         done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
-        episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
+        for agent_id,r in reward.items():
+            episode_reward[agent_id] += r
         obs = next_obs
         
         # episode 结束 ### 在pettingzoo中,env.agents 为空时  一个episode结束
@@ -383,9 +382,9 @@ if __name__ == '__main__':
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
-            for agent_id in env_agents:
-                writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
-                train_return[agent_id].append(episode_reward[agent_id])
+            for agent_id , r in episode_reward.items():
+                writer.add_scalar(f'reward_{agent_id}', r, episode_num + 1)
+                train_return[agent_id].append(r)
 
             episode_num += 1
             obs,info = env.reset(seed=args.seed)

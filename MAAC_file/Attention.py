@@ -178,6 +178,127 @@ class Attention_Critic(nn.Module):
             return q ,all_q #输出 batch_size * 1
 
 
+class Attention_Critic_(nn.Module):
+    id_num : int = 0
+    def __init__(self, dim_info:dict ,hidden_1=128, norm_in=False, is_continue = False,attention_dim=128, attention_block=None):
+        '''
+        dim_info: dict(id:[s,a],id:[s,a],...)  #id为智能体编号
+        注意力机制作用：改善了MADDPG中critic输入随智能体数目增大而指数增加的扩展性问题
+        '''
+        super(Attention_Critic_, self).__init__()
+        
+        self.is_continue = is_continue
+        # 智能体编号
+        self.id = Attention_Critic.id_num
+        Attention_Critic.id_num += 1
+
+        if attention_block is None:
+            attention_block = Attention(in_dim=attention_dim, hidden_dim=hidden_1, num_heads=4)
+        self.attention = attention_block
+
+        # 状态维度序号 [8,10,10] ->[0,8,18,28]  # 海象运算符:= 既计算某个值，也将其赋给一个变量 
+        s_d = [dim_info[id][0] for id in dim_info.keys()]
+        sum_ = 0  
+        self.s_d = [0] + [sum_:= sum_ + i for i in s_d] # 意思等同 s_d = [0] + [sum(s_d[:i+1]) for i in range(len(s_d))] 
+        # 动作维度序号
+        a_d = [dim_info[id][1] for id in dim_info.keys()]
+        sum_ = 0
+        self.a_d = [0] + [sum_:= sum_ + i for i in a_d]  #self.a_d 和 self.s_d 用于forward中切片
+        # 状态+动作维度
+        sa_d =  [i+j for i,j in zip(s_d,a_d)] 
+        # 智能体个数
+        self.agent_n = len(dim_info)
+
+        # 注意力相关
+        self.attention = attention_block
+        ## 输入准备 encoder_fc -> leaky_relu 
+        if norm_in: # affine=False 不使用可学习参数 只做归一化
+            self.encoder_fc_s = nn.Sequential(nn.BatchNorm1d(s_d[self.id],affine=False),nn.Linear(s_d[self.id], attention_dim),)
+            self.encoder_fc_sa = nn.Sequential(nn.BatchNorm1d(sa_d[self.id],affine=False),nn.Linear(sa_d[self.id], attention_dim),)
+            self.encoder_fc_a = nn.Sequential(nn.BatchNorm1d(a_d[self.id],affine=False),nn.Linear(a_d[self.id], attention_dim),)
+        else:
+            self.encoder_fc_s = nn.Linear(s_d[self.id], attention_dim)
+            #print(self.encoder_fc_s.weight[0])
+            self.encoder_fc_sa = nn.Linear(sa_d[self.id], attention_dim)
+            self.encoder_fc_a = nn.Linear(a_d[self.id], attention_dim)
+        # q_value 输出 
+        self.fc1 = torch.nn.Linear(2*attention_dim, hidden_1)
+        self.fc2 = torch.nn.Linear(hidden_1, a_d[self.id])  # 1 为action_dim
+
+        #### bias 连续域用 作为baseline
+        self.bias_fc1 = nn.Linear(attention_dim, attention_dim)
+        self.bias_fc2 = nn.Linear(attention_dim, 1) 
+        
+    def forward(self, s,a, agents,require_v  = False): #agents[agent_id]=Agent() 
+        s = torch.cat(list(s), dim=1) # batch_size * state_dim(state 表示全局状态)
+        a = torch.cat(list(a), dim=1)  
+        agent_id_list = list(agents.keys())
+        # 准备工作
+        s_i_c = s[:,self.s_d[self.id]:self.s_d[self.id+1]] #当前智能体状态 batch_size * obs_dim
+        s_i = self.encoder_fc_s(s_i_c) #当前智能体的embedding batch_size * attention_dim
+        s_i = F.leaky_relu(s_i)     # 加一层激活
+        e_q = s_i.unsqueeze(dim = 1) #当前智能体的查询 batch_size * 1 * attention_dim
+
+        ## 补充 用于continue 
+        if self.is_continue:
+            '''参考https://github.com/Future-Power-Networks/MAPDN/blob/main/critics/maac_critic.py#L141'''
+            a_i = a[:,self.a_d[self.id]:self.a_d[self.id+1]] #当前智能体动作 batch_size * action_dim
+            sa_i = torch.cat((s_i_c,a_i),dim = 1)
+            sa_i = self.encoder_fc_sa(sa_i)
+            sa_i = F.leaky_relu(sa_i)
+            # '''自创'''
+            # # a_i = self.encoder_fc_a(a_i)
+            # # a_i = F.leaky_relu(a_i)
+
+        e_k = []
+        for i in range(self.agent_n):
+            if i!=self.id:
+                s_other_i = s[:,self.s_d[i]:self.s_d[i+1]]
+                a_other_i = a[:,self.a_d[i]:self.a_d[i+1]] # batch_size * action_dim
+                sa_other_i = torch.cat((s_other_i,a_other_i),1)
+                sa_other_i = agents[agent_id_list[i]].critic.encoder_fc_sa(sa_other_i)  ### 本页测试时，去掉.critic
+                sa_other_i = F.leaky_relu(sa_other_i)
+                e_k.append(sa_other_i.unsqueeze(dim = 1)) # batch_size * 1 * attention_dim
+        e_k = torch.cat(e_k,dim=1) # batch_size * (agent_n-1) * attention_dim
+        # print(e_q[0][0][0])
+        # print(e_k[0][0][0])
+        # 注意力机制
+        '''当前智能体的注意力值 即其他智能体对当前智能体的贡献值'''
+        other_values = self.attention(e_q, e_k) # batch_size * attention_dim
+        #print(other_values[0][0])
+        # q_value 输出 
+        if self.is_continue :
+            ''' 参考'''
+            X_in=torch.cat([sa_i, other_values], dim=1)
+            X_in = F.leaky_relu(self.fc1(X_in))
+            q = self.fc2(X_in) # batch_size * 1  #当前动作的q值
+            
+            if require_v:
+                bias = self.bias_fc1(s_i)
+                bias = F.leaky_relu(bias)
+                b = self.bias_fc2(bias)
+                adv = q - b 
+            # ''' 自创'''
+            # X_in_ = torch.cat([s_i, other_values], dim=1)
+            # X_in_ = F.leaky_relu(self.fc1(X_in_))
+            # all_q = self.fc2(X_in_) # batch_size * action_dim 所有动作的q值
+            # v = q - all_q
+
+        else:
+            X_in=torch.cat([s_i, other_values], dim=1)
+            X_in = F.leaky_relu(self.fc1(X_in))
+            all_q = self.fc2(X_in) # batch_size * action_dim 所有动作的q值
+            #print(all_q)
+            int_acs = torch.argmax(a[:,self.a_d[self.id]:self.a_d[self.id+1]], dim=1, keepdim=True)
+            q = all_q.gather(dim = 1, index =int_acs) # batch_size * 1 当前动作的q值
+
+        if require_v and self.is_continue:
+            return q,adv
+        elif self.is_continue:
+            return q
+        else:
+            return q ,all_q #输出 batch_size * 1
+
 ''' 
 # 测试代码
 if __name__ == '__main__':

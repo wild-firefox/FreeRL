@@ -118,7 +118,7 @@ class PPO:
         self.horizon = int(horizon)
         self.trick = trick
 
-        ## dacay std # 根据环境修改
+        ## dacay std #         根据环境修改
         if self.is_continue:
             self.act_std_min=0
             self.act_std_init=1 # 0.4 
@@ -182,7 +182,7 @@ class PPO:
         obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.buffer.all()
         # 计算GAE
         with torch.no_grad():  # adv and v_target have no gradient
-            adv = torch.zeros(self.horizon,dtype=torch.float32)
+            adv = np.zeros(self.horizon)
             gae = 0
             vs = self.agent.critic(obs)
             vs_ = self.agent.critic(next_obs)
@@ -192,7 +192,7 @@ class PPO:
             for i in reversed(range(self.horizon)):
                 gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
                 adv[i] = gae
-            adv = adv.reshape(-1, 1).to(self.device) ## cuda
+            adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
             v_target = adv + vs  
             # if self.trick['adv_norm']:  # Trick 1:advantage normalization
             #     adv = ((adv - adv.mean()) / (adv.std() + 1e-5)) 

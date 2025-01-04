@@ -144,7 +144,7 @@ class Actor(nn.Module):
         x = F.relu(self.l2(x))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
-        mean = self.mean_layer(x)
+
         mean = torch.tanh(self.mean_layer(x))  # 使得mean在-1,1之间
 
         log_std = self.log_std.expand_as(mean)  # 使得log_std与mean维度相同 输出log_std以确保std=exp(log_std)>0
@@ -332,7 +332,7 @@ class MAPPO:
             obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
             # 计算GAE
             with torch.no_grad():  # adv and v_target have no gradient
-                adv = torch.zeros(self.horizon,dtype=torch.float32)
+                adv = np.zeros(self.horizon)
                 gae = 0
                 vs = self.agents[agent_id].critic(obs.values(),self.agents)  ## 改
                 vs_ = self.agents[agent_id].critic(next_obs.values(),self.agents)  ##  改
@@ -342,7 +342,7 @@ class MAPPO:
                 for i in reversed(range(self.horizon)):
                     gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
                     adv[i] = gae
-                adv = adv.reshape(-1, 1).to(self.device) ## cuda
+                adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
                 v_target = adv + vs  
                 if self.trick['adv_norm']:  
                     adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
@@ -359,7 +359,7 @@ class MAPPO:
                         mean, std = self.agents[agent_id].actor(obs[agent_id][index])
                         dist_now = Normal(mean, std)
                         dist_entropy = dist_now.entropy().sum(dim = 1, keepdim=True)  # mini_batch_size x action_dim -> mini_batch_size x 1
-                        action_log_pi_now = dist_now.log_prob(action[agent_id][index]) # mini_batch_size x 1
+                        action_log_pi_now = dist_now.log_prob(action[agent_id][index]) # mini_batch_size x action_dim
                     else:
                         dist_now = Categorical(probs=self.agents[agent_id].actor(obs[agent_id][index]))
                         dist_entropy = dist_now.entropy().reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
@@ -511,7 +511,7 @@ if __name__ == '__main__':
     ## mappo 参数
     parser.add_argument("--huber_delta", type=float, default=10.0) # huber_loss参数
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MAPPO_attention') 
+    parser.add_argument("--policy_name", type=str, default='MAPPO_attention') #此代码只用于MAPPO_attention.py
     parser.add_argument("--trick", type=dict, default={'adv_norm':False,
                                                         'ObsNorm':False,
                                                         'reward_norm':False,'reward_scaling':False,    # or
