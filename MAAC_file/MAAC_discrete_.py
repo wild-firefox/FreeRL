@@ -5,67 +5,74 @@ os.environ['OMP_WAIT_POLICY'] = 'PASSIVE' #确保在pytorch前设置
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Normal
+from torch.distributions import Normal,Categorical
 
 import numpy as np
 from Buffer import Buffer # 与DQN.py中的Buffer一样
 
 from copy import deepcopy
-import pettingzoo #动态导入
+import pettingzoo
 import gymnasium as gym
 import importlib
 import argparse
 from torch.utils.tensorboard import SummaryWriter
 import time
 
-'''
-这里实现了8种MASAC的写法，
-与论文mSAC不同：mSAC 还加入了分解值算法和反事实曲线 mSAC论文链接：https://arxiv.org/pdf/2104.06655
+import random
+from Attention import  Attention,Attention_Critic_
 
-实验发现：效果 
-random_steps = 0时 > random_steps = 500
-log_std 法1 > log_std 法2 见note中结果
-这里选用上述两者较好的结果
-'''
+''' 此discrete 改自官方代码 暂时先实现原论文的discrete,连续域的之后改
+与普通的自改的MASAC (离散)有以下区别
+1. 训练的action 从 标量action_dim -> one_hot类型 例：环境action_dim=4 , [1] -> [0,1,0,0]
+2. critic 的输入从只输入obs_dim -> obs_dim+action_dim
+3. entropy的计算方式 从离散的计算方式-torch.sum(probs * log_probs, dim=1, keepdim=True) -> -log_prob.gather(1, action.reshape(-1,1)) 
+4. 更新actor时,actor_loss 多乘一个log_pi 
+''' 
 
+from torch.autograd import Variable
 ## 第一部分：定义Agent类
-class Actor(nn.Module):
+def categorical_sample(probs, use_cuda=False):
+    int_acs = torch.multinomial(probs, 1)
+    if use_cuda:
+        tensor_type = torch.cuda.FloatTensor
+    else:
+        tensor_type = torch.FloatTensor
+    acs = Variable(tensor_type(*probs.shape).fill_(0)).scatter_(1, int_acs, 1)
+    
+    return int_acs, acs
+
+class Actor_discrete(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_1=128, hidden_2=128):
-        super(Actor, self).__init__()
+        super(Actor_discrete, self).__init__()
         self.l1 = nn.Linear(obs_dim, hidden_1)
         self.l2 = nn.Linear(hidden_1, hidden_2)
-        self.mean_layer = nn.Linear(hidden_2, action_dim) 
-        self.log_std_layer = nn.Linear(hidden_2, action_dim) # 此方法可改为MAPPO中只训练一个std的方法  ## log_std 法1
-        ##self.log_std = nn.Parameter(torch.zeros(1, action_dim)) # 与PPO.py的方法一致：对角高斯函数  ## log_std 法2
+        self.l3 = nn.Linear(hidden_2, action_dim)
 
-    def forward(self, obs, deterministic=False, with_logprob=True):
-        x = F.relu(self.l1(obs))
-        x = F.relu(self.l2(x))
-        mean = self.mean_layer(x)
-        log_std = self.log_std_layer(x)  # 我们输出log_std以确保std=exp(log_std)>0 ## log_std 法1
-        ##log_std = self.log_std.expand_as(mean)  ## log_std 法2
-        log_std = torch.clamp(log_std, -20, 2)
-        std = torch.exp(log_std)
-
-        dist = Normal(mean, std)  # 生成一个高斯分布
-        if deterministic:  # 评估时用
-            a = mean
-        else:
-            a = dist.rsample()  # reparameterization trick: mean+std*N(0,1)
-
-        if with_logprob:  # 方法参考Open AI Spinning up，更稳定。见https://github.com/openai/spinningup/blob/master/spinup/algos/pytorch/sac/core.py#L53C12-L53C24
-            log_pi = dist.log_prob(a).sum(dim=1, keepdim=True) # batch_size x 1
-            log_pi -= (2 * (np.log(2) - a - F.softplus(-2 * a))).sum(dim=1, keepdim=True) #这里是计算tanh的对数概率，
-        else: #常见的其他写法
-            '''
-            log_pi =  dist.log_prob(a).sum(dim=1, keepdim=True)
-            log_pi -= torch.log(1 - torch.tanh(a).pow(2) + 1e-6).sum(dim=1, keepdim=True) # 1e-6是为了数值稳定性 
-            '''
-            log_pi = None
+    def forward(self, x ):
+        x = F.leaky_relu(self.l1(x))
+        x = F.leaky_relu(self.l2(x))
+        x = self.l3(x)
+        probs = F.softmax(x, dim=1) # 1xaction_dim
+        '''
+        原论文的实现：等价于 下面 ## ... ## 
+        on_gpu = next(self.parameters()).is_cuda
+        action, one_hot_action = categorical_sample(probs, use_cuda=on_gpu)
+        '''
+        ##
+        action_dist = Categorical(probs)
+        action = action_dist.sample() # action_dim
+        one_hot_action = F.one_hot(action, num_classes=probs.size(-1)).float()
+        ##
+        log_prob = F.log_softmax(x, dim=1) #torch.log(probs + 1e-8)
+        log_pi = log_prob.gather(1, action.reshape(-1,1)) # 这里是使用了one-hot 所以这里有这一行代码
+        '''
+        1.log_probs1 = F.log_softmax(x, dim=1) 1 等价于 2 ,1更稳定
+        2.probs = torch.softmax(x, dim=1)
+          log_probs2 = torch.log(probs + 1e-8)
+        '''
+        #entropy = -torch.sum(probs * log_pi, dim=1, keepdim=True)  #
         
-        a =  torch.tanh(a)  # 使用tanh将无界的高斯分布压缩到有界的动作区间内。
-
-        return a, log_pi
+        return action ,log_pi ,probs ,one_hot_action
 '''
 集中式训练Critic
 '''    
@@ -84,8 +91,8 @@ class Critic(nn.Module):
 
 
     def forward(self, s, a): # 传入全局观测和动作
-        sa = torch.cat(list(s)+list(a), dim = 1)
-        #sa = torch.cat([s,a], dim = 1)
+        sa = torch.cat(list(s)+list(a), dim = 1)    #batch_size x (obs_dim *agent_num + act_dim * agent_num)
+        # #sa = torch.cat([s,a], dim = 1)
         
         q1 = F.relu(self.l1(sa))
         q1 = F.relu(self.l2(q1))
@@ -97,10 +104,13 @@ class Critic(nn.Module):
         return q1, q2
     
 class Agent:
-    def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, device):
+    def __init__(self, obs_dim, action_dim, dim_info, actor_lr, critic_lr, device,attention = False,attention_block=None):
         
-        self.actor = Actor(obs_dim, action_dim, )
-        self.critic = Critic( dim_info )
+        self.actor = Actor_discrete(obs_dim, action_dim,)
+        if attention:
+            self.critic = Attention_Critic_(dim_info,is_continue=False,attention_block=attention_block) #目前attention 只适用于离散动作
+        else:
+            self.critic = Critic( dim_info ) # 未改完
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
@@ -138,17 +148,24 @@ class Alpha:
         self.log_alpha_optimizer.step()
         self.alpha = self.log_alpha.exp()
 
-class MASAC: #先无attention 再加入
+''' 选择了MASAC entropy_way_c _a 为1的方式 action_way为1的方式 '''
+class MAAC: #先无attention 再加入对比
     def __init__(self, dim_info, is_continue, actor_lr, critic_lr, buffer_size, device, trick = None):
 
-        self.attention = False
+        self.one_hot = True
+        self.attention = True ###!!!
         self.agents  = {}
         self.buffers = {}
+        if self.attention:
+            attention_block = Attention(in_dim=128, hidden_dim=128, num_heads=4)
         for agent_id, (obs_dim, action_dim) in dim_info.items():
-            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, device=device)
-            self.buffers[agent_id] = Buffer(buffer_size, obs_dim, act_dim = action_dim if is_continue else 1, device = 'cpu')
-
-        self.adaptive_alpha = True
+            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info ,actor_lr, critic_lr, device=device,attention = self.attention,attention_block=attention_block)
+            if self.one_hot:
+                self.buffers[agent_id] = Buffer(buffer_size, obs_dim, act_dim = action_dim , device = 'cpu')
+            else:
+                self.buffers[agent_id] = Buffer(buffer_size, obs_dim, act_dim = action_dim if is_continue else 1, device = 'cpu')
+            
+        self.adaptive_alpha = False 
         self.alphas = {} 
 
         for agent_id, (obs_dim, action_dim) in dim_info.items():
@@ -156,47 +173,24 @@ class MASAC: #先无attention 再加入
                 self.alphas[agent_id] = Alpha(action_dim,alpha = 0.01, requires_grad=True, is_continue= is_continue) # Alpha(action_dim).alpha 才是值
             else:
                 self.alphas[agent_id] = Alpha(action_dim,alpha = 0.1,requires_grad=False, is_continue= is_continue) 
-        '''
-        更新critic时 熵的采用方式
-        '0' (参考github)中的方式, https://github.com/ffelten/MASAC/blob/main/masac/masac.py#L285  
-        '1' MAAC论文中的方式, https://github.com/shariqiqbal2810/MAAC/blob/master/algorithms/attention_sac.py#L99
-        '''
-        self.entropy_way_c = '1'  # 按w_c,w_a,a_w 顺序'111' > '110' = '001' > '101'  #'111' 则为MAAC更新模式的MASAC 'x10'为MADDPG更新模式的MASAC '001' 则为参考github的MASAC更新模式
-        self.entropy_way_a = '1' 
-        '''
-        更新actor时 动作的采用方式
-        '0' MADDPG论文中的方式,  参考 https://github.com/Git-123-Hub/maddpg-pettingzoo-pytorch/blob/master/MADDPG.py#L105 将此方式推广的话, self.entropy_way_a = '1'
-        '1' MAAC论文中的方式/(参考github)中的方式 两者 在动作采取一致,但在计算log_pi时有区别
-        https://github.com/shariqiqbal2810/MAAC/blob/master/algorithms/attention_sac.py#L139/https://github.com/ffelten/MASAC/blob/main/masac/masac.py#L319
-        '''
-        self.action_way = '1' 
+        
         self.device = device
         self.is_continue = is_continue
         self.agent_x = list(self.agents.keys())[0] #sample 用
     
     def select_action(self, obs):
         actions = {}
+        one_hot_actions = {}
         for agent_id, obs in obs.items():
             obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
             if self.is_continue: # dqn 无此项
                 action , _ = self.agents[agent_id].actor(obs)
-                actions[agent_id] = action.detach().cpu().numpy().squeeze(0) # 1xaction_dim -> action_dim
+                actions[agent_id] = action.detach().cpu().numpy().squeeze() # 1xaction_dim -> action_dim
             else:
-                action = self.agents[agent_id].argmax(dim = 1).detach().cpu().numpy()[0] # []标量
-                actions[agent_id] = action
-        return actions
-    
-    def evaluate_action(self, obs):
-        actions = {}
-        for agent_id, obs in obs.items():
-            obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
-            if self.is_continue: # dqn 无此项
-                action , _ = self.agents[agent_id].actor(obs,deterministic=True)
-                actions[agent_id] = action.detach().cpu().numpy().squeeze(0) # 1xaction_dim -> action_dim
-            else:
-                action = self.agents[agent_id].argmax(dim = 1).detach().cpu().numpy()[0] # []标量
-                actions[agent_id] = action
-        return actions
+                action , _ , _ ,one_hot_action = self.agents[agent_id].actor(obs)
+                actions[agent_id] = action.detach().cpu().numpy().squeeze() # 1xaction_dim -> action_dim
+                one_hot_actions[agent_id] = one_hot_action.detach().cpu().numpy().squeeze()
+        return actions ,one_hot_actions
     
     def add(self, obs, action, reward, next_obs, done):
         for agent_id, buffer in self.buffers.items():
@@ -207,63 +201,65 @@ class MASAC: #先无attention 再加入
         indices = np.random.choice(total_size, batch_size, replace=False)
 
         obs, action, reward, next_obs, done = {}, {}, {}, {}, {}
-        next_action = {}
-        next_log_pi = {}
         for agent_id, buffer in self.buffers.items():
             obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id] = buffer.sample(indices)
-            next_action[agent_id], next_log_pi[agent_id] = self.agents[agent_id].actor_target(next_obs[agent_id])
 
-        return obs, action, reward, next_obs, done , next_action , next_log_pi #包含所有智能体的数据
+        return obs, action, reward, next_obs, done #包含所有智能体的数据
 
     ## SAC算法相关
     def learn(self, batch_size ,gamma , tau):
         # 多智能体特有-- 集中式训练critic:计算next_q值时,要用到所有智能体next状态和动作
         for agent_id, agent in self.agents.items():
             ## 更新前准备
-            ''' 这一部分原理和MADDPG 一样'''
-            obs, action, reward, next_obs, done , next_action , next_log_pi = self.sample(batch_size) # 必须放for里，否则报二次传播错，原因是原来的数据在计算图中已经被释放了
+            obs, action, reward, next_obs, done = self.sample(batch_size) # 必须放for里，否则报二次传播错，原因是原来的数据在计算图中已经被释放了
+            next_action = {}
+            next_log_pi = {}   
+            next_probs = {}
+            for agent_id_, agent_ in self.agents.items(): # agent_ 和上述agent要区分
+                _, next_log_pi_i ,next_probs_i , next_one_hot_action_i = agent_.actor_target(next_obs[agent_id_])
+                next_action[agent_id_] = next_one_hot_action_i
+                next_log_pi[agent_id_] = next_log_pi_i
+                next_probs[agent_id_] = next_probs_i
 
-            q1_next_target,q2_next_target = agent.critic_target(next_obs.values(), next_action.values()) # batch_size x 1
-            q_next_target = torch.min(q1_next_target, q2_next_target)
+            if self.attention:
+                q  , _ = agent.critic_target(next_obs.values(), next_action.values(), self.agents) # batch_size x 1
+                q_next_target = q 
+            else: 
+                q1_next_target,q2_next_target = agent.critic_target(next_obs.values(), next_action.values()) # batch_size x 1
+                q_next_target = torch.min(q1_next_target, q2_next_target)
 
-            ''' SAC 特有 '0' 参考github 将next_log_pi 求和 来更新critic , '1' MAAC论文 将当前的next_log_pi 用于更新critic '''
-            if self.entropy_way_c == '0':
-                next_log_pi = torch.stack([next_log_pi[agent_id] for agent_id in self.agents.keys()], dim = 1).sum(dim = 1) # batch_size x 3 x 1 -> batch_size x 1
-                entropy_next = - next_log_pi
-            elif self.entropy_way_c == '1':
-                entropy_next = - next_log_pi[agent_id]
+            entropy_next = - next_log_pi[agent_id]#-torch.sum(next_probs[agent_id] * next_log_pi[agent_id] ,dim=1,keepdim=True)
 
             # 先更新critic
             ''' 公式: LQ_w = E_{s,a,r,s',d}[(Q_w(s,a) - (r + gamma * (1 - d) * (Q_w'(s',a') - alpha * log_pi_a(s',a')))^2] '''
             q_target = reward[agent_id] + gamma * (1 - done[agent_id]) * (q_next_target + self.alphas[agent_id].alpha.detach() * entropy_next)  
-
-            q1, q2 = agent.critic(obs.values(), action.values())
-            critic_loss = F.mse_loss(q1, q_target.detach()) + F.mse_loss(q2, q_target.detach())
+            if self.attention:
+                q  , _ = agent.critic(obs.values(), action.values(), self.agents)
+                critic_loss = F.mse_loss(q, q_target.detach())
+            else: 
+                q1, q2 = agent.critic(obs.values(), action.values())
+                critic_loss = F.mse_loss(q1, q_target.detach()) + F.mse_loss(q2, q_target.detach())
             agent.update_critic(critic_loss)
 
             ## 再更新actor
             '''公式: Lpi_θ = E_{s,a ~ D}[-Q_w(s,a) + alpha * log_pi_a(s,a)]  
             理解为 最大化函数V,V = Q + alpha * H
+            ***注*** MAAC原代码（离散域）及原论文公式的中 相比于SAC,多乘了log_pi,否则不收敛。
             '''
-            if self.action_way == '0':
-                new_action, log_pi = agent.actor(obs[agent_id])
-                #entropy = - log_pi  # 相当于 self.entropy_way_a == '1'
-                action[agent_id] = new_action
-                q1_pi, q2_pi = agent.critic(obs.values(), action.values())        
-            elif self.action_way == '1':
-                new_action = {agent_id: agent.actor(obs[agent_id])[0] for agent_id, agent in self.agents.items()}
+            new_action = {agent_id: agent.actor(obs[agent_id])[3] for agent_id, agent in self.agents.items()}
+            _ , log_pi ,probs , _= agent.actor(obs[agent_id])
+            entropy = -log_pi #-torch.sum(probs * log_pi, dim=1, keepdim=True) #- agent.actor(obs[agent_id])[1] * agent.actor(obs[agent_id])[2]
+            if self.attention:
+                q_pi , all_q = agent.critic(obs.values(), new_action.values(),self.agents)
+                v = (all_q * probs).sum(dim=1, keepdim=True)
+                pol_target = q_pi - v
+                actor_loss = (log_pi*(- pol_target - self.alphas[agent_id].alpha.detach() * entropy)).mean()  #这里alpha一定要加detach(),因为在更新critic时,计算图被丢掉了
+            else:
                 q1_pi, q2_pi = agent.critic(obs.values(), new_action.values())
+                q_pi = torch.min(q1_pi, q2_pi)
+                actor_loss = (log_pi * (- q_pi - self.alphas[agent_id].alpha.detach() * entropy)).mean()  #这里alpha一定要加detach(),因为在更新critic时,计算图被丢掉了
+
             
-            if self.entropy_way_a == '0':
-                new_log_pi = torch.stack([agent.actor(obs[agent_id])[1] for agent_id, agent in self.agents.items()], dim = 1).sum(dim = 1) # batch_size x 3 x 1 -> batch_size x 1
-                entropy = - new_log_pi
-            elif self.entropy_way_a == '1':
-                entropy = - agent.actor(obs[agent_id])[1]
-
-
-            q_pi = torch.min(q1_pi, q2_pi)
-
-            actor_loss = (- q_pi - self.alphas[agent_id].alpha.detach() * entropy).mean()  #这里alpha一定要加detach(),因为在更新critic时,计算图被丢掉了
             agent.update_actor(actor_loss)
 
             ## 更新alpha
@@ -286,36 +282,37 @@ class MASAC: #先无attention 再加入
             soft_update(agent.critic_target, agent.critic, tau)
 
     def save(self, model_path):
+        ploicy_name = 'MAAC' if self.attention else 'MAAC'
         torch.save(
             {name: agent.actor.state_dict() for name, agent in self.agents.items()},
-            os.path.join(model_path, f'MASAC.pth')
+            os.path.join(model_path, f'{ploicy_name}.pth')
         )
 
     ## 加载模型
     @staticmethod 
-    def load(dim_info, is_continue, model_dir):
-        policy = MASAC(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
-        data = torch.load(os.path.join(model_dir, f'MASAC.pth'))
-        for agent_id, agent in policy.agents.items():
-            agent.actor.load_state_dict(data[agent_id])
-
+    def load(dim_info, model_dir):
+        policy = MAAC(dim_info, is_continue = False, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
+        ploicy_name = 'MAAC' if policy.attention else 'MAAC'
+        torch.load(
+            os.path.join(model_dir, f'{ploicy_name}.pth')
+        )
         return policy
     
 
 ## 第三部分 main函数
 ## 环境配置
-def get_env(env_name,env_agent_n = None):
+def get_env(env_name,env_agent_n = None,continuous_actions=False):
     # 动态导入环境
     module = importlib.import_module(f'pettingzoo.mpe.{env_name}')
     print('env_agent_n or num_good:',env_agent_n) 
     if env_agent_n is None: #默认环境
-        env = module.parallel_env(max_cycles=25, continuous_actions=True)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions)
     elif env_name == 'simple_spread_v3' or 'simple_adversary_v3': 
-        env = module.parallel_env(max_cycles=25, continuous_actions=True, N = env_agent_n)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions, N = env_agent_n)
     elif env_name == 'simple_tag_v3': 
-        env = module.parallel_env(max_cycles=25, continuous_actions=True, num_good= env_agent_n, num_adversaries=3)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions, num_good= env_agent_n, num_adversaries=3)
     elif env_name == 'simple_world_comm_v3':
-        env = module.parallel_env(max_cycles=25, continuous_actions=True, num_good= env_agent_n, num_adversaries=4)
+        env = module.parallel_env(max_cycles=25, continuous_actions=continuous_actions, num_good= env_agent_n, num_adversaries=4)
     env.reset()
     dim_info = {}
     for agent_id in env.agents:
@@ -328,8 +325,10 @@ def get_env(env_name,env_agent_n = None):
             dim_info[agent_id].append(env.action_space(agent_id).shape[0])
         else:
             dim_info[agent_id].append(env.action_space(agent_id).n)
-
-    return env,dim_info, 1, True # pettingzoo.mpe 环境中，max_action均为1 , 选取连续环境is_continue = True
+    if continuous_actions:
+        return env,dim_info, 1, True # pettingzoo.mpe 环境中，max_action均为1 , 选取连续环境is_continue = True
+    else:
+        return env,dim_info, None, False
 
 ## make_dir 与DQN.py 里一样
 def make_dir(env_name,policy_name = 'DQN',trick = None):
@@ -339,14 +338,14 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     print('trick:',trick)
     # 确定前缀
     if trick is None or not any(trick.values()):
-        prefix = policy_name + '_'
+        prefix = policy_name + '_' 
     else:
         prefix = policy_name + '_'
         for key in trick.keys():
             if trick[key]:
                 prefix += key + '_'
     # 查找现有的文件夹并确定下一个编号
-    existing_dirs = [d for d in os.listdir(env_dir) if d.startswith(prefix) and d[len(prefix):].isdigit()]
+    existing_dirs = [d for d in os.listdir(env_dir) if d.startswith(prefix)]
     max_number = 0 if not existing_dirs else max([int(d.split('_')[-1]) for d in existing_dirs if d.split('_')[-1].isdigit()])
     model_dir = os.path.join(env_dir, prefix + str(max_number + 1))
     os.makedirs(model_dir)
@@ -360,29 +359,29 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
+    parser.add_argument("--env_name", type = str,default="simple_spread_v3")  # alpha = 0.1 for N=5
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
     # 共有参数
-    parser.add_argument("--seed", type=int, default=100) # 0 10 100
+    parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(600))
-    parser.add_argument("--save_freq", type=int, default=int(600//4))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数 满足此开始自己探索
     parser.add_argument("--learn_steps_interval", type=int, default=1)
     # 训练参数
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--tau", type=float, default=0.01)
-    ## AC参数
-    parser.add_argument("--actor_lr", type=float, default=1e-3)
+    ## AC参数 
+    parser.add_argument("--actor_lr", type=float, default=1e-3) # 1e-3 #
     parser.add_argument("--critic_lr", type=float, default=1e-3)
     ## buffer参数   
     parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MASAC')
-    parser.add_argument("--trick", type=dict, default=None)  
+    parser.add_argument("--policy_name", type=str, default='MAAC_discrete')
+    parser.add_argument("--trick", type=dict, default=None) 
+
     # device参数   
-    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
+    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda 
 
     args = parser.parse_args()
 
@@ -391,28 +390,32 @@ if __name__ == '__main__':
     print('Algorithm:',args.policy_name)
 
     ## 环境配置
-    env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N)
+    continuous_actions = False
+    env,dim_info,max_action,is_continue = get_env(args.env_name,env_agent_n = args.N,continuous_actions=continuous_actions)
     print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')
-
+    
     ## 随机数种子
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    ### cuda
+    ## cuda
     torch.cuda.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     print('Random Seed:',args.seed)
+    # random.seed(args.seed)
+    # os.environ['PYTHONHASHSEED'] = str(args.seed)
+    # torch.use_deterministic_algorithms(True)
 
     ## 保存model文件夹
     model_dir = make_dir(args.env_name,policy_name = args.policy_name,trick=args.trick)
-    print(f'model_dir: {model_dir}')
     writer = SummaryWriter(model_dir)
+    print('model_dir:',model_dir)
 
     ## device参数
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
-    policy = MASAC(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick)
+    policy = MAAC(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick)
 
     time_ = time.time()
     ## 训练
@@ -422,23 +425,26 @@ if __name__ == '__main__':
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
     obs,info = env.reset(seed=args.seed)
-    {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
-    
+    {agent: env.action_space(agent).seed(seed=args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
     while episode_num < args.max_episodes:
         step +=1
-
         # 获取动作
-        if step < args.random_steps: # 区分环境里的action_ 和训练的action 
-            action_ = {agent: env.action_space(agent).sample() for agent in env_agents}  # [0,1]
-            action = {agent_id: (action_[agent_id] * 2 - 1)* max_action for agent_id in env_agents} # [0,1] -> [-1,1]
+        if step < args.random_steps:
+            action = {agent_id: env.action_space(agent_id).sample() for agent_id in env_agents}
+            one_hot_actions = {agent_id: np.eye(dim_info[agent_id][1])[action] for agent_id, action in action.items()}
         else:
-            action = policy.select_action(obs)   # [-1,1]
-            action_ = {agent_id: (action[agent_id] + 1) / 2 * max_action for agent_id in env_agents} #[-1,1] -> [0,1] 
-
+            if max_action is not None:
+                action = policy.select_action(obs)   #[-1,1] -> [0,1] 
+                action = {agent_id: (action[agent_id] + 1) / 2 * max_action for agent_id in env_agents}
+            else:
+                action ,one_hot_actions = policy.select_action(obs)
+        action_ = action
+        action = one_hot_actions
+        
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
-        done_bool = {agent_id: done[agent_id] if not truncated[agent_id] else False  for agent_id in env_agents} ### truncated 为超过最大步数
+        done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
         policy.add(obs, action, reward, next_obs, done_bool)
         episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
         obs = next_obs
@@ -459,10 +465,6 @@ if __name__ == '__main__':
         # 满足step,更新网络
         if step > args.start_steps and step % args.learn_steps_interval == 0:
             policy.learn(args.batch_size, args.gamma, args.tau)
-        
-        # 保存模型
-        if episode_num % args.save_freq == 0:
-            policy.save(model_dir)
 
     print('total_time:',time.time()-time_)
     policy.save(model_dir)

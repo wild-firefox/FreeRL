@@ -83,11 +83,14 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 其中包括1个trick实现 in MADDPG_simple_with_tricks.py
 1.ATT  
 * MAPPO 
-注：MAPPO_max 为复刻原代码实现 其中有12个tricks MAPPO 为无tricks的实现。
-
-
+注：MAPPO 为复刻原代码实现 其中有12个tricks MAPPO_simple 为无tricks的实现。
+1.MAPPO_attention.py 加入了attention机制
+2.HAPPO.py 为MAPPO基础之上的改进
+3.MAT.py 以HAPPO为基础，引入了transformer
+* MAAC
+1.MASAC.py (自己写的版本,只有continue版本)
+2.MAAC_discrete.py (根据论文复刻的版本)
 
 
 未完善：
-* MAAC
 * CEM_GD3PG

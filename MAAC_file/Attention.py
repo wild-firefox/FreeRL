@@ -4,6 +4,59 @@ import torch.nn.functional as F
 import numpy as np
 
 '''
+关于随机种子问题：在MAPPO_file/attention.py中已经解释清楚了，这里
+解1（使用了解决方法1）：这里的Attention_Critic 对应MAAC_discrete.py中的attention_critic
+解2（使用了解决方法2）：这里的Attention_Critic_ 对应MAAC_discrete中的attention_critic 
+
+解2 中删去 Attention中的 torch.manual_seed(0) 也可以使得两次运行一致,解1 则不行
+
+但是两者结果不一致的原因：
+解1的seed初始化两次 
+
+例子：下述的结果为：
+Weight1: -0.007486820220947266
+Weight2: -0.8230451345443726
+
+## 1
+import torch
+import torch.nn as nn
+
+class A:
+    def __init__(self):
+        torch.manual_seed(0) # 增加此行 解1
+        self.x = torch.nn.Linear(1, 1)
+        #print(f'Weight: {self.x.weight[0][0]}') # 一样
+
+class B:
+    def __init__(self, a=A()):
+        self.a = a
+        self.b = torch.nn.Linear(1, 1)
+        print(f'Weight1: {self.b.weight[0][0]}') #不一样
+
+# 设置随机种子
+torch.manual_seed(0)
+b = B()
+
+## 2
+class A:
+    def __init__(self):
+        #torch.manual_seed(0) # 增加此行 解1
+        self.x = torch.nn.Linear(1, 1)
+        #print(f'Weight: {self.x.weight[0][0]}') # 一样
+
+class B:
+    def __init__(self, a=None): # 解2 
+        self.a = a
+        self.b = torch.nn.Linear(1, 1)
+        print(f'Weight2: {self.b.weight[0][0]}') #不一样
+
+# 设置随机种子
+torch.manual_seed(0)
+a_ = A() # 改
+b = B(a=a_) # 改
+'''
+
+'''
 基于MAAC代码修改 改成连续域的版本：
 https://github.com/shariqiqbal2810/MAAC/blob/master/utils/critics.py#L8
 '''
@@ -96,9 +149,9 @@ class Attention_Critic(nn.Module):
             self.encoder_fc_a = nn.Sequential(nn.BatchNorm1d(a_d[self.id],affine=False),nn.Linear(a_d[self.id], attention_dim),)
         else:
             self.encoder_fc_s = nn.Linear(s_d[self.id], attention_dim)
-            #print(self.encoder_fc_s.weight[0])
             self.encoder_fc_sa = nn.Linear(sa_d[self.id], attention_dim)
             self.encoder_fc_a = nn.Linear(a_d[self.id], attention_dim)
+        #print(self.encoder_fc_s.weight[0])
         # q_value 输出 
         self.fc1 = torch.nn.Linear(2*attention_dim, hidden_1)
         self.fc2 = torch.nn.Linear(hidden_1, a_d[self.id])  # 1 为action_dim
@@ -194,7 +247,7 @@ class Attention_Critic_(nn.Module):
 
         if attention_block is None:
             attention_block = Attention(in_dim=attention_dim, hidden_dim=hidden_1, num_heads=4)
-        self.attention = attention_block
+        #self.attention = attention_block
 
         # 状态维度序号 [8,10,10] ->[0,8,18,28]  # 海象运算符:= 既计算某个值，也将其赋给一个变量 
         s_d = [dim_info[id][0] for id in dim_info.keys()]
@@ -218,9 +271,9 @@ class Attention_Critic_(nn.Module):
             self.encoder_fc_a = nn.Sequential(nn.BatchNorm1d(a_d[self.id],affine=False),nn.Linear(a_d[self.id], attention_dim),)
         else:
             self.encoder_fc_s = nn.Linear(s_d[self.id], attention_dim)
-            #print(self.encoder_fc_s.weight[0])
             self.encoder_fc_sa = nn.Linear(sa_d[self.id], attention_dim)
             self.encoder_fc_a = nn.Linear(a_d[self.id], attention_dim)
+        #print(self.encoder_fc_s.weight[0])
         # q_value 输出 
         self.fc1 = torch.nn.Linear(2*attention_dim, hidden_1)
         self.fc2 = torch.nn.Linear(hidden_1, a_d[self.id])  # 1 为action_dim
@@ -260,12 +313,10 @@ class Attention_Critic_(nn.Module):
                 sa_other_i = F.leaky_relu(sa_other_i)
                 e_k.append(sa_other_i.unsqueeze(dim = 1)) # batch_size * 1 * attention_dim
         e_k = torch.cat(e_k,dim=1) # batch_size * (agent_n-1) * attention_dim
-        # print(e_q[0][0][0])
-        # print(e_k[0][0][0])
+
         # 注意力机制
         '''当前智能体的注意力值 即其他智能体对当前智能体的贡献值'''
         other_values = self.attention(e_q, e_k) # batch_size * attention_dim
-        #print(other_values[0][0])
         # q_value 输出 
         if self.is_continue :
             ''' 参考'''
