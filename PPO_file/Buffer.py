@@ -321,3 +321,113 @@ class Buffer_for_PPO:
         adv_dones = torch.as_tensor(self.adv_dones,dtype=torch.float32).reshape(-1,1).to(self.device)
         
         return obs, actions, rewards, next_obs, dones , actions_log_probs, adv_dones
+    
+class Buffer_episode_for_PPO:
+
+    def __init__(self):
+        self.episode_data = [] # 存储episode数据
+
+    '''
+        self.env_buffer['obs'] = [] 
+        self.env_buffer['action'] = []
+        self.env_buffer['reward'] = []
+        self.env_buffer['next_obs'] = [] 
+        self.env_buffer['done_bool'] = []
+        self.env_buffer['action_log_pi'] = []
+        self.env_buffer['done'] = []
+    '''
+    def add(self, obs, action, reward, next_obs, done_bool, action_log_pi, done):
+        """添加单个transition到当前episode"""
+        #
+        self.episode_data.append({'state': obs, 'action': action, 'reward': reward, 'next_state': next_obs, 'done': done, 'action_log_probs': action_log_pi, 'done_bool': done_bool})
+
+    def clear(self):
+        self.episode_data = []
+    
+    def all(self, device):
+        # 离散时 需要action和action_log_probs加一个维度 batch_size x action_dim （action_dim 通常为1）
+        states = torch.as_tensor(np.concatenate( [t['state'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).to(device)  # 11x(1*148*102) -> batch_size x state_dim
+        print(states.shape)
+        #print(states.shape)
+        actions = torch.as_tensor(np.concatenate( [t['action'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device) 
+        rewards = torch.as_tensor(np.concatenate( [t['reward'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+        next_states = torch.as_tensor(np.concatenate( [t['next_state'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).to(device)
+        dones = torch.as_tensor(np.concatenate( [t['done'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+        action_log_probs = torch.as_tensor(np.concatenate( [t['action_log_probs'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+        done_bools = torch.as_tensor(np.concatenate( [t['done_bool'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+
+        return states, actions, rewards, next_states, dones, action_log_probs, done_bools
+    
+    def continue_all(self, device):
+        states = torch.as_tensor(np.concatenate( [t['state'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).to(device)  # 11x(1*148*102) -> batch_size x state_dim
+        #print(states.shape)
+        actions = torch.as_tensor(np.concatenate( [t['action'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).to(device) 
+        rewards = torch.as_tensor(np.concatenate( [t['reward'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+        next_states = torch.as_tensor(np.concatenate( [t['next_state'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).to(device)
+        dones = torch.as_tensor(np.concatenate( [t['done'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+        action_log_probs = torch.as_tensor(np.concatenate( [t['action_log_probs'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).to(device)
+        done_bools = torch.as_tensor(np.concatenate( [t['done_bool'] for t in self.episode_data] ,axis = 0 ),dtype=torch.float32).reshape(-1,1).to(device)
+
+        return states, actions, rewards, next_states, dones, action_log_probs, done_bools
+    
+
+class Buffer_atari:
+    """replay buffer for each agent"""
+
+    def __init__(self ):
+        self.stack_frame = False # 默认false
+        self.stack_num = 4 
+        self.episode_buffer = Buffer_episode_for_PPO()
+        self.env_buffer = {}
+        self.env_buffer['obs'] = [] 
+        self.env_buffer['action'] = []
+        self.env_buffer['reward'] = []
+        self.env_buffer['next_obs'] = [] 
+        self.env_buffer['done_bool'] = []
+        self.env_buffer['action_log_pi'] = []
+        self.env_buffer['done'] = []
+
+
+    def add_buffer(self,obs,action,reward,next_obs,done_bool,action_log_pi,done):
+        self.env_buffer['obs'].append(obs)
+        self.env_buffer['action'].append(action)
+        self.env_buffer['reward'].append(reward)
+        self.env_buffer['next_obs'].append(next_obs)
+        self.env_buffer['done_bool'].append(done_bool)
+        self.env_buffer['action_log_pi'].append(action_log_pi)
+        self.env_buffer['done'].append(done)
+
+    def process_buffer(self):
+        # 归一化
+        # for i in range(len(self.env_buffer['obs'])): 
+        #     self.env_buffer['obs'][i] = np.array(self.env_buffer['obs'][i]).reshape(-1,self.bird_resize_h,self.bird_resize_w) / 255.0
+        #     self.env_buffer['next_obs'][i] = np.array(self.env_buffer['next_obs'][i]).reshape(-1,self.bird_resize_h,self.bird_resize_w) / 255.0
+
+        # # 堆叠帧
+        # if self.stack_frame:
+        #     for i in range(len(self.env_buffer['obs'])):
+        #         if i == 0:
+        #             self.env_buffer['obs'][i]  = np.repeat(self.env_buffer['obs'][i],self.stack_num,axis=0)
+        #             self.env_buffer['next_obs'][i]  = np.append(self.env_buffer['obs'][i][1:],self.env_buffer['next_obs'][i],axis=0)
+        #         else:
+        #             self.env_buffer['obs'][i]  = np.append(self.env_buffer['obs'][i-1][1:],self.env_buffer['obs'][i],axis=0)
+        #             self.env_buffer['next_obs'][i]  = np.append(self.env_buffer['obs'][i][1:],self.env_buffer['next_obs'][i],axis=0)
+
+
+        # 存储到训练buffer
+        self.episode_buffer.add(self.env_buffer['obs'],self.env_buffer['action'],self.env_buffer['reward'],self.env_buffer['next_obs'],self.env_buffer['done_bool'],self.env_buffer['action_log_pi'],self.env_buffer['done'])
+        
+        #self.buffer.all()
+        # 得到显示值
+        episode_reward = sum(self.env_buffer['reward'])
+
+        # 清空env_buffer
+        self.env_buffer['obs'] = []
+        self.env_buffer['action'] = []
+        self.env_buffer['reward'] = []
+        self.env_buffer['next_obs'] = []
+        self.env_buffer['done_bool'] = []
+        self.env_buffer['action_log_pi'] = []
+        self.env_buffer['done'] = []
+
+        return episode_reward
