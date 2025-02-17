@@ -21,6 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 ### 这里环境请根据自己环境修改 
 #from env_for_yulin import Environment
+Environment = [0,0]
 
 '''
 一个深度强化学习算法分三个部分实现：

@@ -90,7 +90,10 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 * MAAC
 1.MASAC.py (自己写的版本,只有continue版本)
 2.MAAC_discrete.py (根据论文复刻的版本)
+* MORL
+1.ENVELOPE_DQN.py
+2.ENVELOPE_DDPG.py
 
 
 未完善：
-* CEM_GD3PG
+* CEM_GD3PG(但已成功复现)
