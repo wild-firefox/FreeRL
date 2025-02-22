@@ -93,7 +93,8 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 * MORL
 1.ENVELOPE_DQN.py
 2.ENVELOPE_DDPG.py
-
+* REINFORCE
+1.REINFORCE.py
 
 未完善：
-* CEM_GD3PG(但已成功复现)
+* CEM_GD3PG(已成功复现,未加评估)

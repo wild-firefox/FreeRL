@@ -1,9 +1,9 @@
 import numpy as np
 import torch
 
-from DQN_with_tricks import DQN
-from DQN import get_env 
-from DQN import dis_to_con
+from REINFORCE import REINFORCE
+from REINFORCE import get_env 
+from REINFORCE import dis_to_con
 
 import argparse
 import os
@@ -66,19 +66,19 @@ def render(env_name,policy,action_dim,is_dis_to_con,model_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # 评估模型位置 results/env_name/algorithm_trick_n
-    parser.add_argument("--results_dir", type=str, default="./DQN_file/results/")
-    parser.add_argument("--env_name", type=str, default="MountainCar-v0")
-    parser.add_argument("--folder_name", type=str, default="DQN_Double_1") # 模型文件夹名 model名 + trick名
+    parser.add_argument("--results_dir", type=str, default=None)
+    parser.add_argument("--env_name", type=str, default="CartPole-v1")
+    parser.add_argument("--folder_name", type=str, default="REINFORCE_1") # 模型文件夹名 model名 + trick名
     # 种子和评估次数设置
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--max_episodes", type=int, default=100) #
     ## 是否保存gif
     parser.add_argument("--save_gif", type=bool, default=True)
-    parser.add_argument("--policy_name", type=str, default='DQN')   
+    parser.add_argument("--policy_name", type=str, default="REINFORCE")
     # 注意要和训练时一致
     parser.add_argument("--is_dis_to_con", type=bool, default=True) # dqn 默认为True
     ## trick和folder_name一致 (尽管有些trick在评估时不会用到,但不少是改变模型结构的会用到)                              
-    parser.add_argument("--trick", type=dict, default={'Double':True,'Dueling':False,'PER':False,'Noisy':False,'N_Step':False,'Categorical':False})  
+    parser.add_argument("--trick", type=dict, default=None)  
     args = parser.parse_args()
     print(args)
     print('Algorithm:',args.policy_name)
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     model_dir = os.path.join(results_dir, args.env_name,args.folder_name) 
     print(f'model_dir: {model_dir}')
 
-    policy = DQN.load(dim_info,is_continue = is_continue ,model_dir=model_dir,trick = args.trick)
+    policy = REINFORCE.load(dim_info,is_continue = is_continue ,model_dir=model_dir,trick = args.trick)
 
     # 以不同seed评估100次
     evaluate_return = []
