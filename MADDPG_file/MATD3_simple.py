@@ -21,6 +21,12 @@ from torch.utils.tensorboard import SummaryWriter
 import time
 import re
 
+
+'''MATD3
+自改：无参考代码
+TD3加入 1.双截断Q网络 2.目标策略加噪声 3.延迟更新策略网络和目标网络
+'''
+
 '''maddpg 
 论文：Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments 链接：https://arxiv.org/abs/1706.02275 
 更新代码：https://github.com/openai/maddpg
@@ -79,10 +85,49 @@ class Critic(nn.Module):
 
         return q
 
+''' 创新点1：双截断Q网络'''
+class Critic_TD3(nn.Module):
+    def __init__(self, dim_info:dict, hidden_1=128 , hidden_2=128):
+        super(Critic_TD3, self).__init__()
+        global_obs_act_dim = sum(sum(val) for val in dim_info.values())  
+        
+        # Q1
+        self.l1 = nn.Linear(global_obs_act_dim, hidden_1)
+        self.l2 = nn.Linear(hidden_1, hidden_2)
+        self.l3 = nn.Linear(hidden_2, 1)
+
+        # Q2
+        self.l4 = nn.Linear(global_obs_act_dim, hidden_1)
+        self.l5 = nn.Linear(hidden_1, hidden_2)
+        self.l6 = nn.Linear(hidden_2, 1)
+
+
+    def forward(self, s, a): # 传入观测和动作
+        sa = torch.cat(list(s)+list(a), dim = 1)
+        
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+
+        q2 = F.relu(self.l4(sa))
+        q2 = F.relu(self.l5(q2))
+        q2 = self.l6(q2)
+
+        return q1, q2
+    
+    def Q1(self, s, a):
+        sa = torch.cat(list(s)+list(a), dim = 1)
+        
+        q1 = F.relu(self.l1(sa))
+        q1 = F.relu(self.l2(q1))
+        q1 = self.l3(q1)
+
+        return q1
+
 class Agent:
     def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, device,):   
         self.actor = Actor(obs_dim, action_dim,  ).to(device)
-        self.critic = Critic( dim_info ).to(device)
+        self.critic = Critic_TD3( dim_info ).to(device)
 
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
@@ -104,8 +149,8 @@ class Agent:
 
 
 ## 第二部分：定义DQN算法类
-class MADDPG: 
-    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, buffer_size, device, trick = None):        
+class MATD3: 
+    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, buffer_size, device, trick = None , realize = None):        
         self.agents  = {}
         self.buffers = {}
         for agent_id, (obs_dim, action_dim) in dim_info.items():
@@ -117,6 +162,9 @@ class MADDPG:
         self.agent_x = list(self.agents.keys())[0] #sample 用
 
         self.regular = False # 与DDPG中使用的weight_decay原理一致 
+
+        self.realize = realize
+        self.total_it = 0 # 记录更新次数
 
 
     def select_action(self, obs):
@@ -144,7 +192,7 @@ class MADDPG:
         for agent_id, buffer in self.buffers.items():
             buffer.add(obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id])
 
-    def sample(self, batch_size):
+    def sample(self, batch_size , policy_noise_scale , policy_noise , noise_clip , max_action):
         total_size = len(self.buffers[self.agent_x])
         indices = np.random.choice(total_size, batch_size, replace=False)
 
@@ -152,7 +200,11 @@ class MADDPG:
         next_action = {}
         for agent_id, buffer in self.buffers.items():
             obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id] = buffer.sample(indices)
-            next_action[agent_id] = self.agents[agent_id].actor_target(next_obs[agent_id])
+            if self.realize['policy_noise']:
+                noise = (policy_noise_scale * (torch.randn_like(action[agent_id]) * policy_noise)).clamp(-noise_clip, noise_clip)
+                next_action[agent_id] = (self.agents[agent_id].actor_target(next_obs[agent_id]) * max_action + noise).clamp(-max_action, max_action) / max_action # 归一到[-1,1]
+            else:
+                next_action[agent_id] = self.agents[agent_id].actor_target(next_obs[agent_id])
 
         return obs, action, reward, next_obs, done ,next_action#包含所有智能体的数据
     
@@ -162,28 +214,47 @@ class MADDPG:
     1. actor_loss = -(log(actor(obs)) + lmbda * H(actor_dist)) 知道其他智能体的obs但不知道策略来更新  此时next_target_Q 与上述一样
     这里选择0实现。
     '''
-    def learn(self, batch_size ,gamma , tau):
+    def learn(self, batch_size ,gamma , tau, policy_noise_scale , policy_noise , noise_clip , max_action ,policy_freq):
+        self.total_it += 1
+        if self.realize['twin_delay']:
+            pass
+        else:
+            policy_freq = 1
         # 多智能体特有-- 集中式训练critic:计算next_q值时,要用到所有智能体next状态和动作
         for agent_id, agent in self.agents.items():
             ## 更新前准备
-            obs, action, reward, next_obs, done , next_action = self.sample(batch_size) # 必须放for里，否则报二次传播错，原因是原来的数据在计算图中已经被释放了
-            next_target_Q = agent.critic_target(next_obs.values(), next_action.values())
+            obs, action, reward, next_obs, done , next_action = self.sample(batch_size , policy_noise_scale , policy_noise , noise_clip , max_action) # 必须放for里，否则报二次传播错，原因是原来的数据在计算图中已经被释放了
+            
+            if self.realize['clip_double']:
+                next_target_Q1, next_target_Q2 = agent.critic_target(next_obs.values(), next_action.values())
+                next_target_Q = torch.min(next_target_Q1, next_target_Q2)
+            else:
+                next_target_Q = agent.critic_target(next_obs.values(), next_action.values())
             
             # 先更新critic
             target_Q = reward[agent_id] + gamma * next_target_Q * (1 - done[agent_id])
-            current_Q = agent.critic(obs.values(), action.values())
-            critic_loss = F.mse_loss(current_Q, target_Q.detach())
+            if self.realize['clip_double']:
+                current_Q1, current_Q2 = agent.critic(obs.values(), action.values())
+                critic_loss = F.mse_loss(current_Q1, target_Q.detach()) + F.mse_loss(current_Q2, target_Q.detach())
+            else:
+                current_Q = agent.critic(obs.values(), action.values())
+                critic_loss = F.mse_loss(current_Q, target_Q.detach())
             agent.update_critic(critic_loss)
 
             # 再更新actor
-            new_action = agent.actor(obs[agent_id])
-            action[agent_id] = new_action
-            actor_loss = -agent.critic(obs.values(), action.values()).mean()
-            if self.regular : # 和DDPG.py中的weight_decay一样原理
-                actor_loss += (new_action**2).mean() * 1e-3
-            agent.update_actor(actor_loss)    
+            if self.total_it % policy_freq == 0:
+                new_action = agent.actor(obs[agent_id])
+                action[agent_id] = new_action
+                if self.realize['clip_double']:
+                    actor_loss = -agent.critic.Q1(obs.values(), action.values()).mean()
+                else:
+                    actor_loss = -agent.critic(obs.values(), action.values()).mean()
+                if self.regular : # 和DDPG.py中的weight_decay一样原理
+                    actor_loss += (new_action**2).mean() * 1e-3
+                agent.update_actor(actor_loss)    
         
-        self.update_target(tau)
+        if self.total_it % policy_freq == 0:
+            self.update_target(tau)
 
     def update_target(self, tau):
         def soft_update(target, source, tau):
@@ -203,7 +274,7 @@ class MADDPG:
     ## 加载模型
     @staticmethod 
     def load(dim_info, is_continue, model_dir,trick=None):
-        policy = MADDPG(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
+        policy = MATD3(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, buffer_size = 0, device = 'cpu')
         data = torch.load(os.path.join(model_dir, 'MADDPG.pth'))
         for agent_id, agent in policy.agents.items():
             agent.actor.load_state_dict(data[agent_id])
@@ -271,7 +342,7 @@ if __name__ == '__main__':
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
     # 共有参数
-    parser.add_argument("--seed", type=int, default=100) # 0 10 100
+    parser.add_argument("--seed", type=int, default=0) # 0 10 100
     parser.add_argument("--max_episodes", type=int, default=int(600))
     parser.add_argument("--save_freq", type=int, default=int(600//4))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
@@ -291,13 +362,22 @@ if __name__ == '__main__':
     parser.add_argument("--gauss_scale", type=float, default=1)
     parser.add_argument("--gauss_init_scale", type=float, default=1) # 若不设置衰减，则设置成None
     parser.add_argument("--gauss_final_scale", type=float, default=0.0)
+    ## TD3独有参数
+    parser.add_argument('--policy_noise',type=float,default=0.1) # 目标策略加噪声 # 0.2 
+    parser.add_argument('--noise_clip',type=float,default=0.5) # 噪声截断  # 0.5 ### 也加入衰减
+    parser.add_argument('--policy_freq',type=int,default=1) # 延迟更新策略网络和目标网络
+    parser.add_argument("--policy_noise_scale", type=float, default=1)  # 
+    parser.add_argument("--policy_noise_init_scale", type=float, default=None) #若不设置衰减，则设置成None
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MADDPG_simple')
+    parser.add_argument("--policy_name", type=str, default='MATD3_simple')
+    parser.add_argument("--realize", type=dict, default={'clip_double':True,'policy_noise':True,'twin_delay':True}) 
     parser.add_argument("--trick", type=dict, default=None)  
     # device参数   
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
 
     args = parser.parse_args()
+    if args.policy_name == 'TD3':
+        args.realize = {'clip_double':True,'policy_noise':True,'twin_delay':True}
     print(args)
     print('-' * 50)
     print('Algorithm:',args.policy_name)
@@ -324,7 +404,7 @@ if __name__ == '__main__':
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
-    policy = MADDPG(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick)
+    policy = MATD3(dim_info, is_continue, args.actor_lr, args.critic_lr, args.buffer_size, device, args.trick , args.realize)
 
     time_ = time.time()
     ## 训练
@@ -337,6 +417,8 @@ if __name__ == '__main__':
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
     if args.gauss_init_scale is not None:
         args.gauss_scale = args.gauss_init_scale
+    if args.policy_noise_init_scale is not None:
+        args.policy_noise_scale = args.policy_noise_init_scale
     while episode_num < args.max_episodes:
         step +=1
 
@@ -366,6 +448,9 @@ if __name__ == '__main__':
             if args.gauss_init_scale is not None:
                 explr_pct_remaining = max(0, args.max_episodes - (episode_num + 1)) / args.max_episodes
                 args.gauss_scale = args.gauss_final_scale + (args.gauss_init_scale - args.gauss_final_scale) * explr_pct_remaining
+            if args.policy_noise_scale is not None:
+                explr_pct_remaining = max(0, args.max_episodes - (episode_num + 1)) / args.max_episodes
+                args.policy_noise_scale = 0 + (args.policy_noise_scale - 0) * explr_pct_remaining
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
@@ -379,7 +464,7 @@ if __name__ == '__main__':
         
         # 满足step,更新网络
         if step > args.start_steps and step % args.learn_steps_interval == 0:
-            policy.learn(args.batch_size, args.gamma, args.tau)
+            policy.learn(args.batch_size, args.gamma, args.tau, args.policy_noise_scale, args.policy_noise, args.noise_clip, max_action, args.policy_freq)
 
         # 保存模型
         if episode_num % args.save_freq == 0:
