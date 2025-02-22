@@ -78,23 +78,24 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 * MADDPG  
 注：
 1.MADDPG_reproduction.py,主要实现论文中说明的两种方式。      
-2.MADDPG_simple.py 为MADDPG论文中伪代码的实现,也为DDPG_simple.py的多智能体版本。
-3.MADDPG.py 为DDPG.py的多智能体版本。  
-其中包括1个trick实现 in MADDPG_simple_with_tricks.py
-1.ATT  
-* MAPPO 
+2.MADDPG_simple.py 为MADDPG论文中伪代码的实现,也为DDPG_simple.py的多智能体版本。  
+3.MADDPG.py 为DDPG.py的多智能体版本。    
+其中包括1个trick实现 in MADDPG_simple_with_tricks.py  1.ATT  
+4.**MATD3_simple.py** 为MATD3的简单实现。  
+  
+* MAPPO   
 注：MAPPO 为复刻原代码实现 其中有12个tricks MAPPO_simple 为无tricks的实现。
-1.MAPPO_attention.py 加入了attention机制
-2.HAPPO.py 为MAPPO基础之上的改进
-3.MAT.py 以HAPPO为基础，引入了transformer
-* MAAC
-1.MASAC.py (自己写的版本,只有continue版本)
-2.MAAC_discrete.py (根据论文复刻的版本)
-* MORL
-1.ENVELOPE_DQN.py
-2.ENVELOPE_DDPG.py
-* REINFORCE
-1.REINFORCE.py
+1.MAPPO_attention.py 加入了attention机制  
+2.**HAPPO.py** 为MAPPO基础之上的改进  
+3.**MAT.py** 以HAPPO为基础，引入了transformer  
+* MAAC  
+1.MASAC.py (自己写的版本,只有continue版本)  
+2.MAAC_discrete.py (根据论文复刻的版本)  
+* MORL  
+1.ENVELOPE_DQN.py  
+2.ENVELOPE_DDPG.py  
+* REINFORCE  
+1.REINFORCE.py    
 
 未完善：
 * CEM_GD3PG(已成功复现,未加评估)
