@@ -225,8 +225,8 @@ class Agent:
             self.actor = Actor_discrete(obs_dim, action_dim, trick=trick).to(device)
         self.critic = Critic( dim_info ,trick=trick).to(device)
 
-        self.ac_parameters = list(self.actor.parameters()) + list(self.critic.parameters())
-        self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr)
+        # self.ac_parameters = list(self.actor.parameters()) + list(self.critic.parameters())
+        # self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr)
 
         if trick['adam_eps']:
             self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, eps=1e-5)
@@ -359,12 +359,12 @@ class MAPPO:
                 gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
                 adv[i] = gae
 
-            adv = adv.to(self.device)  # batch_size x 3
             v_target = adv + vs  # batch_size x 3
             if self.trick['adv_norm']:  
                 adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
 
         for agent_id, agent in self.agents.items():
+            obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
             # Optimize policy for K epochs:
             for _ in range(K_epochs): 
                 # 随机打乱样本 并 生成小批量
@@ -411,8 +411,8 @@ class MAPPO:
                         else:
                             critic_loss = F.mse_loss(v_target_, v_s)
                     agent.update_critic(critic_loss)
-        
 
+        
         ## 清空buffer
         for buffer in self.buffers.values():
             buffer.clear()
@@ -532,7 +532,7 @@ if __name__ == '__main__':
     ## mappo 参数
     parser.add_argument("--huber_delta", type=float, default=10.0) # huber_loss参数
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MAPPO')
+    parser.add_argument("--policy_name", type=str, default='MAPPO_simple')
     parser.add_argument("--trick", type=dict, default={'adv_norm':False,
                                                         'ObsNorm':False,
                                                         'reward_norm':False,'reward_scaling':False,    # or
@@ -542,7 +542,7 @@ if __name__ == '__main__':
                                                        'LayerNorm':False,'feature_norm':False,
                                                        })  
     # device参数   
-    parser.add_argument("--device", type=str, default='cuda') # cpu/cuda
+    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
 
     args = parser.parse_args()
     # 检查 reward_norm 和 reward_scaling 的值
@@ -597,7 +597,7 @@ if __name__ == '__main__':
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()
+    obs,info = env.reset()
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
 
     if args.trick['ObsNorm']:
@@ -646,7 +646,7 @@ if __name__ == '__main__':
                     train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
-            obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()
+            obs,info = env.reset()
             if args.trick['ObsNorm']:
                 obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             if args.trick['reward_scaling']:

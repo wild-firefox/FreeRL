@@ -377,7 +377,7 @@ if __name__ == '__main__':
     parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MAAC_discrete')
+    parser.add_argument("--policy_name", type=str, default='MAAC_discrete_')
     parser.add_argument("--trick", type=dict, default=None) 
 
     # device参数   

@@ -551,7 +551,7 @@ if __name__ == '__main__':
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--continuous_actions", type=bool, default=False) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(7000))
@@ -575,7 +575,7 @@ if __name__ == '__main__':
     ## mappo 参数
     parser.add_argument("--huber_delta", type=float, default=10.0) # huber_loss参数
     ## mat 参数
-    parser.add_argument("--lr", type=float, default=5e-4) # 1e-3
+    parser.add_argument("--lr", type=float, default=1e-4) # 1e-3
     parser.add_argument("--n_block", type=int, default=1) # 1
     parser.add_argument("--n_embd", type=int, default=64) # 64
     parser.add_argument("--n_head", type=int, default=1) # 1

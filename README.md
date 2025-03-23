@@ -8,12 +8,14 @@
 * [reinforcement-learning-algorithm](https://github.com/Git-123-Hub/reinforcement-learning-algorithm)
 * [DRL-Pytorch](https://github.com/XinJingHao/DRL-Pytorch/)
 * [cleanRL](https://github.com/vwxyzjn/cleanrl)
+* [MARL-code-pytorch](https://github.com/Lizhi-sjtu/MARL-code-pytorch/tree/main/1.MAPPO_MPE)
+
 
 目的是写出像TD3作者那样简单易懂的DRL代码,  
 由于参考了ElegentRL和Easy的库,from easy to elegent 故起名为freeRL,  
 free也是希望写出的代码可以随意的,自由的从此代码移植到自己的代码上。  
-库的介绍：[【FreeRL】我的深度学习库构建思想](https://blog.csdn.net/weixin_56760882/article/details/142176797)
-
+库的介绍：[【FreeRL】我的深度学习库构建思想](https://blog.csdn.net/weixin_56760882/article/details/142176797)  
+库的不定时更新的博客：[CSDN:荒野火狐](https://blog.csdn.net/weixin_56760882)
 
 ## python环境
 ```python
@@ -87,15 +89,31 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 注：MAPPO 为复刻原代码实现 其中有12个tricks MAPPO_simple 为无tricks的实现。
 1.MAPPO_attention.py 加入了attention机制  
 2.**HAPPO.py** 为MAPPO基础之上的改进  
-3.**MAT.py** 以HAPPO为基础，引入了transformer  
+3.**MAT.py** 以HAPPO为基础，引入了transformer    
+
 * MAAC  
 1.MASAC.py (自己写的版本,只有continue版本)  
 2.MAAC_discrete.py (根据论文复刻的版本)  
-* MORL  
+
+* MORL    
 1.ENVELOPE_DQN.py  
 2.ENVELOPE_DDPG.py  
 * REINFORCE  
 1.REINFORCE.py    
 
-未完善：
+CEM_RL：
 * CEM_GD3PG(已成功复现,未加评估)
+
+--- 2025.3.22 更新 ---  
+MARL的学习率总结：AC学习率一致（针对env.step(),智能体个数为3的情况下,其他未提到的学习率均不收敛/收敛不明显）  
+**注：具体详见各个MARL的库的readme.md,简单固定种子环境下，1e-3均能收敛（MAT是5e-4除外）**   
+MADDPG / MATD3: 5e-4   
+MAPPO：5e-4  
+MAPPO_discrete：1e-3/5e-4  
+HAPPO:1e-4  
+MASAC:1e-4  
+MAAC_discrete:5e-4  
+MAT：1e-4  
+
+待完善：
+1.MAT的discrete的效果收敛实验，算法没复现好  

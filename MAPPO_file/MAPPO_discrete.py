@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal,Categorical
 
 import numpy as np
-from Buffer import Buffer_for_PPO
+from Buffer import Buffer_for_PPO , ReplayBuffer
 
 from copy import deepcopy
 import pettingzoo #动态导入
@@ -21,83 +21,21 @@ from normalization import Normalization,RewardScaling
 
 ## 其他
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import BatchSampler, SequentialSampler
 import time
 import re
 import pickle 
 
-''' mappo:论文链接：https://arxiv.org/pdf/2103.01955 代码链接：https://github.com/marlbenchmark/on-policy/
-提出的建议
-1.使用值value归一化来稳定价值函数。（注：不是状态归一，技巧为PopArt，(Preserving Outputs Precisely, while Adaptively Rescaling Targets) 来自文献Learning values across many orders of magnitude:https://arxiv.org/pdf/1602.07714  / 拓展：Multi-task Deep Reinforcement Learning with popart）
-2.如果可以，使用必要的全局状态和本地状态。
-3.在困难环境中最多使用10个epoch(10 or 5)，在简单环境中最多使用15个epoch;避免分成多个batch(1个效果最好)（PPO原论文中是分成horizon//mini_batch_size个)
-4.为获得最高PPO性能，将clip值在0.2以下范围内调整。（论文中0.2和0.05效果还行）
-5.使用一个较大的batch_size(即horizon值)以达到最好的效果，然后调整它来优化效果。
 
-论文代码中使用的PPO技巧trick: 参考知乎:https://zhuanlan.zhihu.com/p/386559032
-1.Generalized Advantage Estimation：这个技巧来自文献：Hign-dimensional continuous control using generalized advantage estimation。
-2.Input Normalization
-3.Value Clipping：与策略截断类似，将值函数进行一个截断。
-4.Relu activation with Orthogonal Initialization： 论文：https://arxiv.org/pdf/2004.05867v2
-5.Gredient Clipping：梯度更新不要太大。
-6.Layer Normalization：## 来自同名论文 ###后面文献并无提及LayerNorm 怀疑作者贴错了  这个技巧来自文献：Regularization matters in policy optimization-an empirical study on continuous control。
-7.Soft Trust-Region Penalty：## 这个技巧来自文件：Revisiting design choices in proximal policy optimization。
-## 还有一些其他技巧 知乎上没提到但是论文和代码上有,补充如下
-8.huber_loss: 用于替代mse_loss，减少outlier的影响。
-9.reward normalization: 对reward进行归一化。
-10.use_feature_normalization :类似于Layer Normalization,在特征输入前采取的归一化操作
-11.adm_eps: 与PPO_with_tricks一致
-12.lr_decay: 与PPO_with_tricks一致
-'''
+''' mappo:论文链接：https://arxiv.org/pdf/2103.01955 代码链接：https://github.com/marlbenchmark/on-policy/'''
 
-## 先写一个简单的continue环境实现：
-'''
-关于建议
-1.由于在ddpg中发现建议1中的popart效果并不理想，所以这里不使用popart
-2.知乎上的评论：论证了建议2中可以不用特别加入agent-specific information,所以按一般MA拼接状态和动作处理，PPO无动作 只拼接状态
-3.设置epocch = 5 ; minibatch_size = 1 (即:不再进行对batch_size进行小批量,在我这相当于该值与horizon相等 )#后者我做过实验，效果确实会好一点点,见PPO_file中note
-4.设置clip = 0.2
-5.和原ppo一样看情况调整horizon
 
-综上:关注3，4即可
+''' 此离散代码 修改自github: https://github.com/Lizhi-sjtu/MARL-code-pytorch/tree/main/1.MAPPO_MPE 
 
-关于args.trick:  trick为PPO_file中PPO_with_tricks.py中已实现过的trick
-1.使用GAE 与原PPO一致
-2.Input Normalization 即trick中的ObsNorm 确实重要
-3.Value Clipping 新增
-4.Orthogonal Initialization 即trick中的orthogonal_init
-5.Gredient Clipping PPO中默认加入以防止梯度爆炸和消失 
-6.Layer Normalization 新增
-7.Soft Trust-Region Penalty 新增 ## 在trpo用到，在PPO没有用到
-8.huber_loss 新增
-9.reward normalization 即trick中reward_norm or reward_scaling
-10.use_feature_normalization 新增
-11.adm_eps 即trick中的adam_eps
-12.lr_decay 即trick中的lr_decay
-
-# 综上：重点关注3,6,7 (实际加入2,3,4,6,7,8,9,10,11 trick) 1 5 默认加入
-综上：PPO_with_tricks.py中的7个trick全部加入了,(其中tanh的trick集成在net_init中,且默认使用relu,故上述中没有提及)
-重点关注3,6,7,8,10
-
-另外:
-mappo与rmappo区别见原代码:https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/scripts/train/train_mpe.py#L68
-区别：rmappo使用了RNN
-原代码中shared文件夹和separated文件夹的区别:
-shared文件夹：使用一个共享的actor-critic网络
-separated文件夹：每个agent使用一个独立的actor-critic网络 
-这里是实现的separated的形式
-
-注：这里MAPPO 为复刻的论文代码
-MAPPO_simple为不加任何trick的代码
-
-疑问：
-从代码：https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/runner/separated/mpe_runner.py#L126
-（action_env = np.squeeze(np.eye(self.envs.action_space[agent_id].n)[action], 1)）
-及 https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/envs/mpe/environment.py#L206
-（if action[0] == 1:）
-这里两处矛盾 推出原论文作者并没有使用mpe的离散环境做实验，
-且此代码实现效果和https://blog.csdn.net/onlyyyyyyee/article/details/139331501类似 所以推测复现代码实现并无错误。  
-
-此代码的log_std 使用对角高斯函数的效果好，此与MASAC不同
+与MAPPO.py中实现的discrete(不收敛)不同之处：（大方向的不同）
+1.单智能体 actor discrete 1维 0-4  (输入 1xobs_dim 输出 1x1 ) -> 多智能体 actor discrete n维 [0-4,0-4,0-4,...]  (输入 nxobs_dim 输出nx1 ) (局限：各个obs_dim必须相同)
+2.Buffer修改  多了智能体的n维 (局限：有episode_length限制)
+3.critic 输入 nxobs_dim 输出nx1  (局限：各个obs_dim必须相同)
 '''
 
 
@@ -181,7 +119,7 @@ class Actor_discrete(nn.Module):
         x = F.relu(self.l2(x))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
-        a_prob = torch.softmax(self.l3(x), dim=1)
+        a_prob = torch.softmax(self.l3(x), dim=-1) ## ！！ 注意这里为-1
         return a_prob
         
 class Critic(nn.Module):
@@ -201,11 +139,10 @@ class Critic(nn.Module):
             net_init(self.l3)  
         
     def forward(self, s): # 传入全局观测和动作
-        s = torch.cat(list(s), dim = 1)
+        #s = torch.cat(list(s), dim = 1)
         #sa = torch.cat([s,a], dim = 1)
         if self.trick['feature_norm']:
             s = F.layer_norm(s, s.size()[1:])
-        
         q = F.relu(self.l1(s))
         if self.trick['LayerNorm']:
             q = F.layer_norm(q, q.size()[1:])
@@ -226,26 +163,32 @@ class Agent:
         self.critic = Critic( dim_info ,trick=trick).to(device)
 
         self.ac_parameters = list(self.actor.parameters()) + list(self.critic.parameters())
-        self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr)
 
         if trick['adam_eps']:
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, eps=1e-5)
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr, eps=1e-5)
+            self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr, eps=1e-5)
         else:
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+            self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr)
 
-    def update_actor(self, loss):
-        self.actor_optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
-        self.actor_optimizer.step()
+        '''
+        # if trick['adam_eps']:
+        #     self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, eps=1e-5)
+        #     self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr, eps=1e-5)
+        # else:
+        #     self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
+        #     self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
 
-    def update_critic(self, loss):
-        self.critic_optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
-        self.critic_optimizer.step()
+    # def update_actor(self, loss):
+    #     self.actor_optimizer.zero_grad()
+    #     loss.backward()
+    #     torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+    #     self.actor_optimizer.step()
+
+    # def update_critic(self, loss):
+    #     self.critic_optimizer.zero_grad()
+    #     loss.backward()
+    #     torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+    #     self.critic_optimizer.step()
+    '''
 
     def update_ac(self, loss):
         self.ac_optimizer.zero_grad()
@@ -260,12 +203,17 @@ def huber_loss(e, d):
     return a*e**2/2 + b*d*(abs(e)-d/2)
 
 class MAPPO: 
-    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, horizon, device, trick = None):        
-        self.agents  = {}
-        self.buffers = {}
-        for agent_id, (obs_dim, action_dim) in dim_info.items():
-            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, is_continue, device,trick)
-            self.buffers[agent_id] = Buffer_for_PPO(horizon, obs_dim, act_dim = action_dim if is_continue else 1, device = device)
+    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, horizon, device, trick = None ,buffer = None):        
+
+        
+        self.agent_x = list(dim_info.keys())[0]
+        obs_dim, action_dim = dim_info[self.agent_x]
+        self.N = len(dim_info)
+
+        self.agent = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, is_continue, device,trick)
+        self.buffer = buffer
+        self.batch_size = buffer.batch_size
+        self.episode_limit = buffer.episode_limit
 
         self.device = device
         self.is_continue = is_continue
@@ -274,172 +222,185 @@ class MAPPO:
         self.horizon = int(horizon)
 
         self.trick = trick
-        self.num_agents = len(self.agents) # 智能体数量
 
         if self.trick['lr_decay']:
             self.actor_lr = actor_lr
             self.critic_lr = critic_lr
 
-
     def select_action(self, obs):
-        actions = {}
-        action_log_pis = {}
-        for agent_id, obs in obs.items():
-            obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
-            if self.is_continue: 
-                mean, std = self.agents[agent_id].actor(obs)
-                dist = Normal(mean, std)
-                action = dist.sample()
-                action_log_pi = dist.log_prob(action) # 1xaction_dim
-            else:
-                dist = Categorical(probs=self.agents[agent_id].actor(obs))
-                action = dist.sample()
-                action_log_pi = dist.log_prob(action)
-            # to 真实值
-            actions[agent_id] = action.detach().cpu().numpy().squeeze(0) # 1xaction_dim ->action_dim
-            action_log_pis[agent_id] = action_log_pi.detach().cpu().numpy().squeeze(0)
+        # obs : Nxobs_dim
+        obs = torch.as_tensor(np.array(obs),dtype=torch.float32).to(self.device)
+
+        if self.is_continue: 
+            mean, std = self.agent.actor(obs)
+            dist = Normal(mean, std)
+            action = dist.sample()
+            action_log_pi = dist.log_prob(action) # 1xaction_dim
+        else:
+            dist = Categorical(probs=self.agent.actor(obs))
+            action = dist.sample()
+            action_log_pi = dist.log_prob(action)
+        # to 真实值
+        actions = action.detach().cpu().numpy() # 3 
+        action_log_pis = action_log_pi.detach().cpu().numpy() # 3 
 
         return actions , action_log_pis
     
     def evaluate_action(self,obs):
-        actions = {}
-        for agent_id, obs in obs.items():
-            obs = torch.as_tensor(obs,dtype=torch.float32).reshape(1, -1).to(self.device)
-            if self.is_continue: 
-                mean, _ = self.agents[agent_id].actor(obs)
-                action = mean.detach().cpu().numpy().squeeze(0)
-            else:
-                a_prob = self.agents[agent_id].actor(obs).detach().cpu().numpy().squeeze(0)
-                action = np.argmax(a_prob)
+        '''只对discrete有效'''
+        # obs : Nxobs_dim
+        obs = torch.as_tensor(np.array(obs),dtype=torch.float32).to(self.device)
 
-            actions[agent_id] = action
-        return actions
+        action = self.agent.actor(obs).argmax(dim=-1) # 1xaction_dim
+        action = action.detach().cpu().numpy() # 3
+
+        return action
+
     
     ## buffer 相关
-    def add(self, obs, action, reward, next_obs, done, action_log_pi , adv_dones):
-        for agent_id, buffer in self.buffers.items():
-            buffer.add(obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id], action_log_pi[agent_id] , adv_dones[agent_id])
-
-    def all(self):
-        obs = {}
-        action = {}
-        reward = {}
-        next_obs = {}
-        done = {}
-        action_log_pi = {}
-        adv_dones = {}
-        for agent_id, buffer in self.buffers.items():
-            obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id], action_log_pi[agent_id], adv_dones[agent_id] = buffer.all()
-        return obs, action, reward, next_obs, done, action_log_pi, adv_dones
-
-    ## PPO算法相关
-    def learn(self, minibatch_size, gamma, lmbda ,clip_param, K_epochs, entropy_coefficient, huber_delta = None):
-        # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
-        obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
-        # 计算GAE
-        with torch.no_grad():  # adv and v_target have no gradient
-            adv = torch.zeros(self.horizon, self.num_agents)
-            gae = 0
-            vs = []
-            vs_ = []
-            for agent_id  in self.buffers.keys():
-                vs.append(self.agents[agent_id].critic(obs.values()))  # batch_size x 1
-                vs_.append(self.agents[agent_id].critic(next_obs.values()))
-            
-            vs = torch.cat(vs, dim = 1) # batch_size x 3
-            vs_ = torch.cat(vs_, dim = 1) # batch_size x 3
-
-            reward = torch.cat(list(reward.values()), dim = 1) # 
-            done = torch.cat(list(done.values()), dim = 1)
-            adv_dones = torch.cat(list(adv_dones.values()), dim = 1)
-
-            td_delta = reward + gamma * (1.0 - done) * vs_ - vs  #这里可能使用全局的reward
-            
-            for i in reversed(range(self.horizon)):
-                gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
-                adv[i] = gae
-
-            adv = adv.to(self.device)  # batch_size x 3
-            v_target = adv + vs  # batch_size x 3
-            if self.trick['adv_norm']:  
-                adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
-
-        for agent_id, agent in self.agents.items():
-            # Optimize policy for K epochs:
-            for _ in range(K_epochs): 
-                # 随机打乱样本 并 生成小批量
-                shuffled_indices = np.random.permutation(self.horizon)
-                indexes = [shuffled_indices[i:i + minibatch_size] for i in range(0, self.horizon, minibatch_size)]
-                for index in indexes:
-                    # 先更新actor
-                    if self.is_continue:
-                        mean, std = self.agents[agent_id].actor(obs[agent_id][index])
-                        dist_now = Normal(mean, std)
-                        dist_entropy = dist_now.entropy().sum(dim = 1, keepdim=True)  # mini_batch_size x action_dim -> mini_batch_size x 1
-                        action_log_pi_now = dist_now.log_prob(action[agent_id][index]) # mini_batch_size x action_dim
-                    else:
-                        dist_now = Categorical(probs=self.agents[agent_id].actor(obs[agent_id][index]))
-                        dist_entropy = dist_now.entropy().reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
-                        action_log_pi_now = dist_now.log_prob(action[agent_id][index].reshape(-1)).reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
-
-                    ratios = torch.exp(action_log_pi_now.sum(dim = 1, keepdim=True) - action_log_pi[agent_id][index].sum(dim = 1, keepdim=True))  # shape(mini_batch_size X 1)
-                    surr1 = ratios * adv[index]   # mini_batch_size x 1
-                    surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
-                    actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()
-                    agent.update_actor(actor_loss)
-
-                    # 再更新critic
-                    obs_ = {agent_id: obs[agent_id][index] for agent_id in obs.keys()}
-
-                    v_s = self.agents[agent_id].critic(obs_.values()) # mini_batch_size x 1
-                    v_s = v_s.repeat(1,self.num_agents) # mini_batch_size x 3
-
-                    v_target_ = v_target[index]
-                    if self.trick['ValueClip']:
-                        ''' 参考原mappo代码,原代码存储了return和value值,故实现上和如下有些许差异'''
-                        v_target_clip = torch.clamp(v_target_, v_s - clip_param, v_s + clip_param)
-                        if self.trick['huber_loss']:
-                            critic_loss_clip = huber_loss(v_target_clip-v_s,huber_delta).mean()
-                            critic_loss_original = huber_loss(v_target_-v_s,huber_delta).mean()
-                        else:
-                            critic_loss_clip = F.mse_loss(v_target_clip, v_s)
-                            critic_loss_original = F.mse_loss(v_target_, v_s)
-                        critic_loss = torch.max(critic_loss_original,critic_loss_clip)
-                    else:
-                        if self.trick['huber_loss']:
-                            critic_loss = huber_loss(v_target_-v_s,huber_delta).mean()
-                        else:
-                            critic_loss = F.mse_loss(v_target_, v_s)
-                    agent.update_critic(critic_loss)
+    def get_value(self, s): # copy 
+        with torch.no_grad():
+            critic_inputs = []
+            # Because each agent has the same global state, we need to repeat the global state 'N' times.
+            s = torch.tensor(s, dtype=torch.float32).unsqueeze(0).repeat(self.N, 1).to(self.device)  # (state_dim,)-->(N,state_dim)
+            critic_inputs.append(s)
+            critic_inputs = torch.cat([x for x in critic_inputs], dim=-1)  # critic_input.shape=(N, critic_input_dim)
+            v_n = self.agent.critic(critic_inputs)  # v_n.shape(N,1)
+        return v_n.detach().cpu().numpy().flatten()
         
+    def get_inputs(self, batch):
+        actor_inputs, critic_inputs = [], []
+        actor_inputs.append(batch['obs_n'])
+        critic_inputs.append(batch['s'].unsqueeze(2).repeat(1, 1, self.N, 1))
 
-        ## 清空buffer
-        for buffer in self.buffers.values():
-            buffer.clear()
+        actor_inputs = torch.cat([x for x in actor_inputs], dim=-1)  # actor_inputs.shape=(batch_size, episode_limit, N, actor_input_dim)
+        critic_inputs = torch.cat([x for x in critic_inputs], dim=-1)  # critic_inputs.shape=(batch_size, episode_limit, N, critic_input_dim)
+        return actor_inputs, critic_inputs
+        
+    def add(self, obs, action, reward, next_obs, done, action_log_pi , adv_dones ,episode_step):
+        ''' 这里并没有使用adv_dones/dones 和 next_obs ，只是为了保持接口一致'''
+        # obs : Nxobs_dim  
+        obs_n = obs
+        s = np.array(obs).flatten() 
+        v_n = self.get_value(s) 
+        a_n = action
+        a_logprob_n = action_log_pi
+        r_n = [v for v in reward.values()]
+        done_n = [d for d in done.values()]   # 参考的代码用的是done
+
+
+        self.buffer.store_transition(episode_step, obs_n, s, v_n, a_n, a_logprob_n, r_n, done_n)
+
     
+    ## PPO算法相关
+    def learn(self, minibatch_size, gamma, lmbda ,clip_param, K_epochs, entropy_coefficient, huber_delta = None): # huber
+        # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
+
+        batch = self.buffer.get_training_data()  # get training data
+
+        # Calculate the advantage using GAE
+        adv = []
+        gae = 0
+        with torch.no_grad():  # adv and td_target have no gradient
+            deltas = batch['r_n'] + gamma * batch['v_n'][:, 1:] * (1 - batch['done_n']) - batch['v_n'][:, :-1]  # deltas.shape=(batch_size,episode_limit,N)
+            for t in reversed(range(self.episode_limit)):
+                gae = deltas[:, t] + gamma * lmbda * gae
+                adv.insert(0, gae)
+            adv = torch.stack(adv, dim=1)  # adv.shape(batch_size,episode_limit,N)
+            v_target = adv + batch['v_n'][:, :-1]  # v_target.shape(batch_size,episode_limit,N)
+            if self.trick['adv_norm']:
+                adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+            # if self.use_adv_norm:  # Trick 1: advantage normalization
+            #     adv = ((adv - adv.mean()) / (adv.std() + 1e-5))
+
+        """
+            Get actor_inputs and critic_inputs
+            actor_inputs.shape=(batch_size, max_episode_len, N, actor_input_dim)
+            critic_inputs.shape=(batch_size, max_episode_len, N, critic_input_dim)
+        """
+        actor_inputs, critic_inputs = self.get_inputs(batch)
+
+        # Optimize policy for K epochs:
+        for _ in range(K_epochs):
+            for index in BatchSampler(SequentialSampler(range(self.batch_size)), minibatch_size, False):
+                """
+                    get probs_now and values_now
+                    probs_now.shape=(mini_batch_size, episode_limit, N, action_dim)
+                    values_now.shape=(mini_batch_size, episode_limit, N)
+                """
+                probs_now = self.agent.actor(actor_inputs[index])
+                values_now = self.agent.critic(critic_inputs[index]).squeeze(-1)
+
+                dist_now = Categorical(probs_now)
+                dist_entropy = dist_now.entropy()  # dist_entropy.shape=(mini_batch_size, episode_limit, N)
+                # batch['a_n'][index].shape=(mini_batch_size, episode_limit, N)
+                a_logprob_n_now = dist_now.log_prob(batch['a_n'][index])  # a_logprob_n_now.shape=(mini_batch_size, episode_limit, N)
+                # a/b=exp(log(a)-log(b))
+                ratios = torch.exp(a_logprob_n_now - batch['a_logprob_n'][index].detach())  # ratios.shape=(mini_batch_size, episode_limit, N)
+                surr1 = ratios * adv[index]
+                surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]
+                actor_loss = -torch.min(surr1, surr2) - entropy_coefficient * dist_entropy
+
+                # if self.use_value_clip:
+                #     values_old = batch["v_n"][index, :-1].detach()
+                #     values_error_clip = torch.clamp(values_now - values_old, -self.epsilon, self.epsilon) + values_old - v_target[index]
+                #     values_error_original = values_now - v_target[index]
+                #     critic_loss = torch.max(values_error_clip ** 2, values_error_original ** 2)
+                # else:
+                if self.trick['ValueClip']:
+                    values_old = batch["v_n"][index, :-1].detach()
+                    values_error_clip = torch.clamp(values_now - values_old, -clip_param, clip_param) + values_old - v_target[index]
+                    if self.trick['huber_loss']:
+                        values_error_clip = huber_loss(values_error_clip, huber_delta).mean()
+                        values_error_original = huber_loss(values_now - v_target[index], huber_delta).mean()
+                    else:
+                        values_error_original = values_now - v_target[index]
+                    critic_loss = torch.max(values_error_clip ** 2, values_error_original ** 2)
+                else:
+                    critic_loss = (values_now - v_target[index]) ** 2
+
+                total_loss = actor_loss.mean() + critic_loss.mean()
+                self.agent.update_ac(total_loss)  
+                
+                # self.agent.ac_optimizer.zero_grad()
+                # ac_loss = actor_loss.mean() + critic_loss.mean()
+                # ac_loss.backward()
+                # # if self.use_grad_clip:  # Trick 7: Gradient clip
+                # #     torch.nn.utils.clip_grad_norm_(self.ac_parameters, 0.5)#10.0)
+                
+                self.agent.ac_optimizer.step()
+        
+        self.buffer.reset_buffer()
+                
     def lr_decay(self,episode_num,max_episodes):
         lr_a_now = self.actor_lr * (1 - episode_num / max_episodes)
+        '''
         lr_c_now = self.critic_lr * (1 - episode_num / max_episodes)
         for agent in self.agents.values():
             for p in agent.actor_optimizer.param_groups:
                 p['lr'] = lr_a_now
             for p in agent.critic_optimizer.param_groups:
                 p['lr'] = lr_c_now
+        '''
+        for p in self.agent.ac_optimizer.param_groups:
+            p['lr'] = lr_a_now
  
 
     def save(self, model_dir):
         torch.save(
-            {name: agent.actor.state_dict() for name, agent in self.agents.items()},
-            os.path.join(model_dir, 'MAPPO.pth')
+            #{name: agent.actor.state_dict() for name, agent in self.agents.items()},
+            self.agent.actor.state_dict(),
+            os.path.join(model_dir, 'MAPPO_discrete.pth')
         )
         
     ## 加载模型
     @staticmethod 
     def load(dim_info, is_continue, model_dir,trick=None):
         policy = MAPPO(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, horizon = 0, device = 'cpu',trick=trick)
-        data = torch.load(os.path.join(model_dir, 'MAPPO.pth'))
-        for agent_id, agent in policy.agents.items():
-            agent.actor.load_state_dict(data[agent_id])
+        data = torch.load(os.path.join(model_dir, 'MAPPO_discrete.pth'))
+        # for agent_id, agent in policy.agents.items():
+        #     agent.actor.load_state_dict(data[agent_id])
+        policy.agent.actor.load_state_dict(data)
         return policy
 
 
@@ -508,7 +469,8 @@ if __name__ == '__main__':
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--episode_limit", type=int, default=25)
+    parser.add_argument("--continuous_actions", type=bool, default=False) 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(120000))
@@ -520,8 +482,8 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--tau", type=float, default=0.01)
     ## A-C参数   
-    parser.add_argument("--actor_lr", type=float, default=1e-3)
-    parser.add_argument("--critic_lr", type=float, default=1e-3)
+    parser.add_argument("--actor_lr", type=float, default=1e-3)  ## 这里的AC参数是一起优化的,只用到了actor_lr
+    parser.add_argument("--critic_lr", type=float, default=5e-4)
     # PPO独有参数
     parser.add_argument("--horizon", type=int, default=256) # 
     parser.add_argument("--clip_param", type=float, default=0.2)
@@ -570,6 +532,11 @@ if __name__ == '__main__':
     env,dim_info,max_action,is_continue = get_env(args.env_name, env_agent_n = args.N, continuous_actions = args.continuous_actions)
     print(f'Env:{args.env_name}  dim_info:{dim_info}  max_action:{max_action}  max_episodes:{args.max_episodes}')
 
+    ## buffer
+    agent_x = list(dim_info.keys())[0]
+    obs_dim, action_dim = dim_info[agent_x]
+    buffer = ReplayBuffer(N = len(dim_info), obs_dim = obs_dim, state_dim = sum(val[0] for val in dim_info.values()), episode_limit = args.episode_limit ,batch_size = args.horizon ,device = args.device)
+
     ## 随机数种子
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -588,16 +555,17 @@ if __name__ == '__main__':
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
-    policy = MAPPO(dim_info, is_continue, args.actor_lr, args.critic_lr, args.horizon, device, args.trick)
+    policy = MAPPO(dim_info, is_continue, args.actor_lr, args.critic_lr, args.horizon, device, args.trick ,buffer)
 
     time_ = time.time()
     ## 训练
     episode_num = 0
     step = 0
+    episode_step = 0
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()
+    obs,info = env.reset()
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
 
     if args.trick['ObsNorm']:
@@ -608,36 +576,51 @@ if __name__ == '__main__':
         reward_norm = {agent_id : Normalization(shape=1) for agent_id in env_agents}
     elif args.trick['reward_scaling']:
         reward_norm = {agent_id : RewardScaling(shape=1, gamma=args.gamma,) for agent_id in env_agents}
+
+
     
+
     while episode_num < args.max_episodes:
         step +=1
 
         # 获取动作
+        obs = [ v for v in obs.values()]
         action , action_log_pi = policy.select_action(obs)   # action (-1,1)
         if is_continue:
             action_ = {agent_id: np.clip(action[agent_id] * max_action, -max_action, max_action,dtype= np.float32) for agent_id in action}
             action_ = {agent_id: (action_[agent_id] + 1) / 2 for agent_id in env_agents}  # [-1,1] -> [0,1]
         else:
-            action_ = action
+            action_ = { agent: action[i] for i,agent in enumerate(env_agents)}
+            
             
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         if args.trick['ObsNorm']:
             next_obs = {agent_id : obs_norm[agent_id](next_obs[agent_id]) for agent_id in env_agents }
         if args.trick['reward_norm'] or args.trick['reward_scaling']:
-            reward_ = {agent_id : reward_norm[agent_id](reward[agent_id]) for agent_id in env_agents}
+            reward_ = {agent_id : reward_norm[agent_id](reward[agent_id])[0] for agent_id in env_agents}
 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
         done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
+        
         if args.trick['reward_norm'] or args.trick['reward_scaling']:
-            policy.add(obs, action, reward_, next_obs, done_bool, action_log_pi, done)
+            policy.add(obs, action, reward_, next_obs, done_bool, action_log_pi, done , episode_step)
         else:
-            policy.add(obs, action, reward, next_obs, done_bool, action_log_pi, done)
+            policy.add(obs, action, reward, next_obs, done_bool, action_log_pi, done , episode_step)
 
+        episode_step += 1
         episode_reward = {agent_id: episode_reward[agent_id] + reward[agent_id] for agent_id in env_agents}
+
         obs = next_obs
 
         if any(done.values()):
+            
+            obs = [ v for v in next_obs.values()]
+            s = np.array(obs).flatten()
+            v_n = policy.get_value(s)
+            policy.buffer.store_last_value(episode_step , v_n)
+            episode_step = 0
+
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
@@ -646,7 +629,7 @@ if __name__ == '__main__':
                     train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
-            obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()
+            obs,info = env.reset()
             if args.trick['ObsNorm']:
                 obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             if args.trick['reward_scaling']:
@@ -654,7 +637,8 @@ if __name__ == '__main__':
             episode_reward = {agent_id: 0 for agent_id in env_agents}
         
         # 满足step,更新网络
-        if step % args.horizon == 0:
+        if policy.buffer.episode_num == args.horizon:
+        #if step % args.horizon == 0:
             policy.learn(args.minibatch_size, args.gamma, args.lmbda, args.clip_param, args.K_epochs, args.entropy_coefficient,args.huber_delta)
             if args.trick['lr_decay']:
                 policy.lr_decay(episode_num,max_episodes=args.max_episodes)

@@ -268,6 +268,7 @@ class MAPPO:
         self.horizon = int(horizon)
 
         self.trick = trick
+        self.num_agents = len(self.agents) 
 
         if self.trick['lr_decay']:
             self.actor_lr = actor_lr
@@ -327,27 +328,37 @@ class MAPPO:
 
     ## PPO算法相关
     def learn(self, minibatch_size, gamma, lmbda ,clip_param, K_epochs, entropy_coefficient, huber_delta = None):
-        # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
-        for agent_id, agent in self.agents.items():
-            obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
-            # 计算GAE
-            with torch.no_grad():  # adv and v_target have no gradient
-                adv = np.zeros(self.horizon)
-                gae = 0
-                vs = self.agents[agent_id].critic(obs.values(),self.agents)  ## 改
-                vs_ = self.agents[agent_id].critic(next_obs.values(),self.agents)  ##  改
-                td_delta = reward[agent_id] + gamma * (1.0 - done[agent_id]) * vs_ - vs
-                td_delta = td_delta.reshape(-1).cpu().detach().numpy()
-                adv_dones = adv_dones[agent_id].reshape(-1).cpu().detach().numpy()
-                for i in reversed(range(self.horizon)):
-                    gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
-                    adv[i] = gae
-                adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
-                v_target = adv + vs  
-                if self.trick['adv_norm']:  
-                    adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
-
+         # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
+        obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
+        # 计算GAE
+        with torch.no_grad():  # adv and v_target have no gradient
+            adv = torch.zeros(self.horizon, self.num_agents)
+            gae = 0
+            vs = []
+            vs_ = []
+            for agent_id  in self.buffers.keys():
+                vs.append(self.agents[agent_id].critic(obs.values()))  # batch_size x 1
+                vs_.append(self.agents[agent_id].critic(next_obs.values()))
             
+            vs = torch.cat(vs, dim = 1) # batch_size x 3
+            vs_ = torch.cat(vs_, dim = 1) # batch_size x 3
+
+            reward = torch.cat(list(reward.values()), dim = 1) # 
+            done = torch.cat(list(done.values()), dim = 1)
+            adv_dones = torch.cat(list(adv_dones.values()), dim = 1)
+
+            td_delta = reward + gamma * (1.0 - done) * vs_ - vs  #这里可能使用全局的reward
+            
+            for i in reversed(range(self.horizon)):
+                gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
+                adv[i] = gae
+
+            adv = adv.to(self.device)
+            v_target = adv + vs  # batch_size x 3
+            if self.trick['adv_norm']:  
+                adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
+
+        for agent_id, agent in self.agents.items():
             # Optimize policy for K epochs:
             for _ in range(K_epochs): 
                 # 随机打乱样本 并 生成小批量
@@ -366,14 +377,17 @@ class MAPPO:
                         action_log_pi_now = dist_now.log_prob(action[agent_id][index].reshape(-1)).reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
 
                     ratios = torch.exp(action_log_pi_now.sum(dim = 1, keepdim=True) - action_log_pi[agent_id][index].sum(dim = 1, keepdim=True))  # shape(mini_batch_size X 1)
-                    surr1 = ratios * adv[index]  
+                    surr1 = ratios * adv[index]   # mini_batch_size x 1
                     surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
                     actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()
                     agent.update_actor(actor_loss)
 
                     # 再更新critic
                     obs_ = {agent_id: obs[agent_id][index] for agent_id in obs.keys()}
-                    v_s = self.agents[agent_id].critic(obs_.values(),self.agents)  ## 改
+
+                    v_s = self.agents[agent_id].critic(obs_.values()) # mini_batch_size x 1
+                    v_s = v_s.repeat(1,self.num_agents) # mini_batch_size x 3
+
                     v_target_ = v_target[index]
                     if self.trick['ValueClip']:
                         ''' 参考原mappo代码,原代码存储了return和value值,故实现上和如下有些许差异'''
@@ -391,7 +405,6 @@ class MAPPO:
                         else:
                             critic_loss = F.mse_loss(v_target_, v_s)
                     agent.update_critic(critic_loss)
-        
 
         ## 清空buffer
         for buffer in self.buffers.values():

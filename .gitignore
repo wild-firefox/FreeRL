@@ -10,7 +10,7 @@ test copy.py
 /PPO_file/__pycache__
 /TD3_file/__pycache__
 /SAC_file/__pycache__
-/MAAC_file
+/MAAC_file/__pycache__
 /MAPPO_file/__pycache__
 /ENVELOPE_MORL_file/__pycache__
 /REINFORCE_file/__pycache__

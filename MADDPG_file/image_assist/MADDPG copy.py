@@ -40,7 +40,7 @@ actor_lr = 1e-2
 critic_lr = 1e-2
 gamma = 0.95
 buffer_size = 1e6
-batch_size 
+batch_size = 1024
 '''
 
 '''
@@ -401,14 +401,20 @@ class Normalization_batch_size:
 具体见:https://pettingzoo.farama.org/environments/mpe
 注意：环境中N个智能体的设置
 '''
+'''
+4 : 1e-3 1e-3
+6 : 5e-4 5e-4
+7 ： 6 上 hidden 128 -> 64
+MADDPG 4： 6上 MADDPG
+'''
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
-    parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
-    parser.add_argument("--max_episodes", type=int, default=int(600))
+    parser.add_argument("--max_episodes", type=int, default=int(40000))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
     parser.add_argument("--random_steps", type=int, default=0)  # 满足此开始自己探索
     parser.add_argument("--learn_steps_interval", type=int, default=1)
@@ -416,8 +422,8 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--tau", type=float, default=0.01)
     ## AC参数
-    parser.add_argument("--actor_lr", type=float, default=1e-3)
-    parser.add_argument("--critic_lr", type=float, default=1e-3)
+    parser.add_argument("--actor_lr", type=float, default=5e-4)
+    parser.add_argument("--critic_lr", type=float, default=5e-4)
     ## buffer参数   
     parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
@@ -425,8 +431,8 @@ if __name__ == '__main__':
     ## gauss noise
     parser.add_argument("--gauss_sigma", type=float, default=1) # 高斯标准差 # 0.1 
     parser.add_argument("--gauss_scale", type=float, default=1)
-    parser.add_argument("--gauss_init_scale", type=float, default=1) # 若不设置衰减，则设置成None
-    parser.add_argument("--gauss_final_scale", type=float, default=0.0)
+    parser.add_argument("--gauss_init_scale", type=float, default=1) # 若不设置衰减，则设置成None 若设置了衰减 则 sigma = gauss_scale * gauss_sigma
+    parser.add_argument("--gauss_final_scale", type=float, default=0)
     ## OU noise
     parser.add_argument("--ou_sigma", type=float, default=1) # 
     parser.add_argument("--ou_dt", type=float, default=1)
@@ -479,7 +485,7 @@ if __name__ == '__main__':
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset(seed = args.seed) # 改成env.reset()后增加其鲁棒性，但会导致seed失效
+    obs,info = env.reset() # 改成env.reset()后增加其鲁棒性，但会导致seed失效
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
     if args.gauss_init_scale is not None:
         args.gauss_scale = args.gauss_init_scale
@@ -534,14 +540,14 @@ if __name__ == '__main__':
                 explr_pct_remaining = max(0, args.max_episodes - (episode_num + 1)) / args.max_episodes
                 args.gauss_scale = args.gauss_final_scale + (args.gauss_init_scale - args.gauss_final_scale) * explr_pct_remaining
             ## 显示
-            if  (episode_num + 1) % 100 == 0:
+            if  (episode_num + 1) % 100 == 0 :
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
-            for agent_id , r in episode_reward.items():
-                writer.add_scalar(f'reward_{agent_id}', r, episode_num + 1)
-                train_return[agent_id].append(r)
+                for agent_id , r in episode_reward.items():
+                    writer.add_scalar(f'reward_{agent_id}', r, episode_num + 1)
+                    train_return[agent_id].append(r)
                                  
             episode_num += 1
-            obs,info = env.reset(seed = args.seed) # 改成env.reset()后增加其鲁棒性，但会导致seed失效
+            obs,info = env.reset() # 改成env.reset()后增加其鲁棒性，但会导致seed失效
             if args.supplement['ObsNorm']:
                 obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             episode_reward = {agent_id: 0 for agent_id in env_agents}

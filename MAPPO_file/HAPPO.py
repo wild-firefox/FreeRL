@@ -338,14 +338,45 @@ class HAPPO:
     ## PPO算法相关
     def learn(self, minibatch_size, gamma, lmbda ,clip_param, K_epochs, entropy_coefficient, huber_delta = None):
         ## HAPPO : 打乱智能体顺序 https://github.com/morning9393/HAPPO-HATRPO/blob/master/runners/separated/base_runner.py#L134C24-L134C56 (具体新增也在这)
+        
+        # 先计算GAE
+        obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
+        with torch.no_grad():  # adv and v_target have no gradient
+            adv = torch.zeros(self.horizon, self.num_agents)
+            gae = 0
+            vs = []
+            vs_ = []
+            for agent_id  in self.buffers.keys():
+                vs.append(self.agents[agent_id].critic(obs.values()))  # batch_size x 1
+                vs_.append(self.agents[agent_id].critic(next_obs.values()))
+            
+            vs = torch.cat(vs, dim = 1) # batch_size x 3
+            vs_ = torch.cat(vs_, dim = 1) # batch_size x 3
+
+            reward = torch.cat(list(reward.values()), dim = 1) # 
+            done = torch.cat(list(done.values()), dim = 1)
+            adv_dones = torch.cat(list(adv_dones.values()), dim = 1)
+
+            td_delta = reward + gamma * (1.0 - done) * vs_ - vs  #这里可能使用全局的reward
+            
+            for i in reversed(range(self.horizon)):
+                gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
+                adv[i] = gae
+
+            adv = adv.to(self.device)  
+
+            v_target = adv + vs  # batch_size x 3
+            if self.trick['adv_norm']:  
+                adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
+        
+        
         factor = np.ones((self.horizon,1),dtype=np.float32) # 这里修改了原代码的写法 以匹配不同的动作空间域 从结果来看一致：原论文是在更新的时候取了sum所以act_dim维度也是1
         #for agent_idnum in torch.randperm(self.num_agents):
         for num_index, agent_idnum in enumerate(torch.randperm(self.num_agents)): #改成 unless m = n
             agent_id = self.agent_ids[agent_idnum]
             
-        # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
-        #for agent_id, agent in self.agents.items(): # MAPPO
-            obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
+            # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
+            #obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
             
             # HAPPO 新增 在更新前先计算出旧的action_log_pi
             if num_index != self.num_agents - 1:
@@ -358,23 +389,6 @@ class HAPPO:
                     action_log_pi_old = dist_now.log_prob(action[agent_id][index].reshape(-1)).reshape(-1,1) # batch_size  -> batch_size x 1
                 
                 old_actions_logprob = action_log_pi_old.sum(dim = 1, keepdim=True)
-
-            # 计算GAE
-            with torch.no_grad():  # adv and v_target have no gradient
-                adv = np.zeros(self.horizon)
-                gae = 0
-                vs = self.agents[agent_id].critic(obs.values())
-                vs_ = self.agents[agent_id].critic(next_obs.values())
-                td_delta = reward[agent_id] + gamma * (1.0 - done[agent_id]) * vs_ - vs
-                td_delta = td_delta.reshape(-1).cpu().detach().numpy()
-                adv_dones = adv_dones[agent_id].reshape(-1).cpu().detach().numpy()
-                for i in reversed(range(self.horizon)):
-                    gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
-                    adv[i] = gae
-                adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda 
-                v_target = adv + vs  
-                if self.trick['adv_norm']:  
-                    adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
 
             factor_t = torch.as_tensor(factor,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda 
             
@@ -404,7 +418,9 @@ class HAPPO:
  
                     # 再更新critic
                     obs_ = {agent_id: obs[agent_id][index] for agent_id in obs.keys()}
-                    v_s = self.agents[agent_id].critic(obs_.values())
+
+                    v_s = self.agents[agent_id].critic(obs_.values()) # mini_batch_size x 1
+                    v_s = v_s.repeat(1,self.num_agents) # mini_batch_size x 3
                     v_target_ = v_target[index]
                     if self.trick['ValueClip']:
                         ''' 参考原mappo代码,原代码存储了return和value值,故实现上和如下有些许差异'''
@@ -529,11 +545,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
-    parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
     parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100  
-    parser.add_argument("--max_episodes", type=int, default=int(5000))
+    parser.add_argument("--max_episodes", type=int, default=int(120000))
     parser.add_argument("--save_freq", type=int, default=int(5000//4))
     parser.add_argument("--start_steps", type=int, default=0) # 满足此开始更新 此算法不用
     parser.add_argument("--random_steps", type=int, default=0)  # 满足此开始自己探索
@@ -542,8 +558,8 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--tau", type=float, default=0.01)
     ## A-C参数   
-    parser.add_argument("--actor_lr", type=float, default=1e-3)
-    parser.add_argument("--critic_lr", type=float, default=1e-3)
+    parser.add_argument("--actor_lr", type=float, default=1e-4)
+    parser.add_argument("--critic_lr", type=float, default=1e-4)
     # PPO独有参数
     parser.add_argument("--horizon", type=int, default=256) # 
     parser.add_argument("--clip_param", type=float, default=0.2)
@@ -619,7 +635,7 @@ if __name__ == '__main__':
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset(seed=args.seed)
+    obs,info = env.reset()
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
 
     if args.trick['ObsNorm']:
@@ -664,12 +680,12 @@ if __name__ == '__main__':
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
-            for agent_id in env_agents:
-                writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
-                train_return[agent_id].append(episode_reward[agent_id])
+                for agent_id in env_agents:
+                    writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
+                    train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
-            obs,info = env.reset(seed=args.seed)
+            obs,info = env.reset()
             if args.trick['ObsNorm']:
                 obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             if args.trick['reward_scaling']:

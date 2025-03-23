@@ -361,10 +361,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
-    parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
-    parser.add_argument("--max_episodes", type=int, default=int(40000))
+    parser.add_argument("--max_episodes", type=int, default=int(600))
     parser.add_argument("--save_freq", type=int, default=int(600//4))
     parser.add_argument("--start_steps", type=int, default=500) # 满足此开始更新
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数 满足此开始自己探索
@@ -373,8 +373,8 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", type=float, default=0.95)
     parser.add_argument("--tau", type=float, default=0.01)
     ## AC参数
-    parser.add_argument("--actor_lr", type=float, default=1e-4)
-    parser.add_argument("--critic_lr", type=float, default=1e-4)
+    parser.add_argument("--actor_lr", type=float, default=1e-3)
+    parser.add_argument("--critic_lr", type=float, default=1e-3)
     ## buffer参数   
     parser.add_argument("--buffer_size", type=int, default=1e6) #1e6默认是float,在bufffer中有int强制转换
     parser.add_argument("--batch_size", type=int, default=256)  #保证比start_steps小
@@ -421,7 +421,7 @@ if __name__ == '__main__':
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset() # 改成env.reset()后增加其鲁棒性，但会导致seed失效
+    obs,info = env.reset(seed = args.seed) # 改成env.reset()后增加其鲁棒性，但会导致seed失效
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
     
     while episode_num < args.max_episodes:
@@ -448,12 +448,12 @@ if __name__ == '__main__':
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
-                for agent_id in env_agents:
-                    writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
-                    train_return[agent_id].append(episode_reward[agent_id])
+            for agent_id in env_agents:
+                writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
+                train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
-            obs,info = env.reset() # 改成env.reset()后增加其鲁棒性，但会导致seed失效
+            obs,info = env.reset(seed = args.seed) # 改成env.reset()后增加其鲁棒性，但会导致seed失效
             episode_reward = {agent_id: 0 for agent_id in env_agents}
         
         # 满足step,更新网络
