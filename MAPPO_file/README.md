@@ -60,3 +60,24 @@ HAPPO只实现了连续动作的实现，离散动作暂未实现，离散动作
 更多算法，效果如下：  
 MAT：1e-4    
 ![alt text](image_assist/image-4.png)
+
+---2025.4.17更新---
+
+终于发现自己实现的MAPPO.py的discrete环境下不能收敛的问题了。    
+是环境上的问题，算法上没问题， 将原来策略直接输出的action_,用int()转换成int类型就可以了。原因：PettingZoo的离散动作空间对np.array(0)的支持不友好，不如gymnasium的支持好。
+```
+action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
+```
+至此，HAPPO,MAT的discrete环境下也可以收敛了。
+
+-----2025.6.7更新---  
+增加了对环境SMACv2的支持
+代码如下：
+```
+MAPPO_for_mask_action.py （全局状态仅为各部分状态拼接） 效果见results/smacv2/MAPPO_1
+MAPPO_for_mask_action_state.py (全局状态各部分状态拼接+全局环境状态) 效果见results/smacv2/MAPPO_2
+```
+两个效果多次实验发现差不多，在30kepiosdes下，胜率为12%左右，效果不如https://github.com/Lizhi-sjtu/MARL-code-pytorch/tree/main/2.MAPPO_SMAC 这里实现的效果（去掉RNN效果更好，为18%左右），以后再实验是什么原因导致的。
+
+
+修改之前的MAPPO_attention.py出现的修改错误 见issue4

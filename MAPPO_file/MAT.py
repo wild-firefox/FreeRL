@@ -554,7 +554,7 @@ if __name__ == '__main__':
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=5) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--continuous_actions", type=bool, default=False) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=0) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(7000))
@@ -572,7 +572,7 @@ if __name__ == '__main__':
     parser.add_argument("--horizon", type=int, default=256) # 
     parser.add_argument("--clip_param", type=float, default=0.05) # 0.2
     parser.add_argument("--K_epochs", type=int, default=15) # 15 # 困难任务建议设置为5 
-    parser.add_argument("--entropy_coefficient", type=float, default=0.01)
+    parser.add_argument("--entropy_coefficient", type=float, default=0.01)  ## 效果不好可尝试往小调 0.005
     parser.add_argument("--minibatch_size", type=int, default=256)  
     parser.add_argument("--lmbda", type=float, default=0.95) # GAE参数
     ## mappo 参数
@@ -669,7 +669,7 @@ if __name__ == '__main__':
             action_ = {agent_id: np.clip(action[agent_id] * max_action, -max_action, max_action,dtype= np.float32) for agent_id in action}
             action_ = {agent_id: (action_[agent_id] + 1) / 2 for agent_id in env_agents}  # [-1,1] -> [0,1]
         else:
-            action_ = action
+            action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
             
         #print(action_)
         # 探索环境

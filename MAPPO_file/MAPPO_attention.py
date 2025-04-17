@@ -87,14 +87,7 @@ mappo与rmappo区别见原代码:https://github.com/marlbenchmark/on-policy/blob
 
 注：这里MAPPO 为复刻的论文代码
 MAPPO_simple为不加任何trick的代码
-
-疑问：
-从代码：https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/runner/separated/mpe_runner.py#L126
-（action_env = np.squeeze(np.eye(self.envs.action_space[agent_id].n)[action], 1)）
-及 https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/envs/mpe/environment.py#L206
-（if action[0] == 1:）
-这里两处矛盾 推出原论文作者并没有使用mpe的离散环境做实验，
-且此代码实现效果和https://blog.csdn.net/onlyyyyyyee/article/details/139331501类似 所以推测复现代码实现并无错误。  
+ 
 '''
 
 
@@ -195,7 +188,7 @@ class Critic(nn.Module):
             net_init(self.l2)
             net_init(self.l3)  
         
-    def forward(self, s): # 传入全局观测和动作
+    def forward(self, s, agents_nouse): # 传入全局观测和动作
         s = torch.cat(list(s), dim = 1)
         #sa = torch.cat([s,a], dim = 1)
         if self.trick['feature_norm']:
@@ -337,8 +330,8 @@ class MAPPO:
             vs = []
             vs_ = []
             for agent_id  in self.buffers.keys():
-                vs.append(self.agents[agent_id].critic(obs.values()))  # batch_size x 1
-                vs_.append(self.agents[agent_id].critic(next_obs.values()))
+                vs.append(self.agents[agent_id].critic(obs.values(),self.agents))  # batch_size x 1
+                vs_.append(self.agents[agent_id].critic(next_obs.values(),self.agents))  # batch_size x 1
             
             vs = torch.cat(vs, dim = 1) # batch_size x 3
             vs_ = torch.cat(vs_, dim = 1) # batch_size x 3
@@ -385,7 +378,7 @@ class MAPPO:
                     # 再更新critic
                     obs_ = {agent_id: obs[agent_id][index] for agent_id in obs.keys()}
 
-                    v_s = self.agents[agent_id].critic(obs_.values()) # mini_batch_size x 1
+                    v_s = self.agents[agent_id].critic(obs_.values(),self.agents) # mini_batch_size x 1
                     v_s = v_s.repeat(1,self.num_agents) # mini_batch_size x 3
 
                     v_target_ = v_target[index]
@@ -534,7 +527,7 @@ if __name__ == '__main__':
                                                        'LayerNorm':False,'feature_norm':False,
                                                        })  
     ## 改进
-    parser.add_argument("--improvement", type=dict, default={'attention':False})  
+    parser.add_argument("--improvement", type=dict, default={'attention':True})  
     # device参数   
     parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
 
@@ -624,7 +617,7 @@ if __name__ == '__main__':
             action_ = {agent_id: np.clip(action[agent_id] * max_action, -max_action, max_action,dtype= np.float32) for agent_id in action}
             action_ = {agent_id: (action_[agent_id] + 1) / 2 for agent_id in env_agents}  # [-1,1] -> [0,1]
         else:
-            action_ = action
+            action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
             
 
         # 探索环境

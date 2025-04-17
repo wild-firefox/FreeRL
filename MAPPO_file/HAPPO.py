@@ -183,7 +183,7 @@ class Actor_discrete(nn.Module):
 
     def forward(self, obs ):
         if self.trick['feature_norm']:
-            x = F.layer_norm(obs, obs.size()[1:])
+            obs = F.layer_norm(obs, obs.size()[1:])
         x = F.relu(self.l1(obs))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
@@ -385,8 +385,8 @@ class HAPPO:
                     dist_now = Normal(mean, std)
                     action_log_pi_old = dist_now.log_prob(action[agent_id]) # batch_size x 1
                 else:
-                    dist_now = Categorical(probs=self.agents[agent_id].actor(obs[agent_id][index]))
-                    action_log_pi_old = dist_now.log_prob(action[agent_id][index].reshape(-1)).reshape(-1,1) # batch_size  -> batch_size x 1
+                    dist_now = Categorical(probs=self.agents[agent_id].actor(obs[agent_id]))
+                    action_log_pi_old = dist_now.log_prob(action[agent_id].reshape(-1)).reshape(-1,1) # batch_size  -> batch_size x 1
                 
                 old_actions_logprob = action_log_pi_old.sum(dim = 1, keepdim=True)
 
@@ -546,7 +546,7 @@ if __name__ == '__main__':
     # 环境参数
     parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--continuous_actions", type=bool, default=False) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(120000))
@@ -635,7 +635,7 @@ if __name__ == '__main__':
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset()
+    obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
 
     if args.trick['ObsNorm']:
@@ -656,7 +656,7 @@ if __name__ == '__main__':
             action_ = {agent_id: np.clip(action[agent_id] * max_action, -max_action, max_action,dtype= np.float32) for agent_id in action}
             action_ = {agent_id: (action_[agent_id] + 1) / 2 for agent_id in env_agents}  # [-1,1] -> [0,1]
         else:
-            action_ = action
+            action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
             
 
         # 探索环境
@@ -685,7 +685,7 @@ if __name__ == '__main__':
                     train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
-            obs,info = env.reset()
+            obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()
             if args.trick['ObsNorm']:
                 obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             if args.trick['reward_scaling']:
