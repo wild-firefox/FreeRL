@@ -25,6 +25,16 @@ gymnasium[all] 0.29.1
 pygame 0.25.2 # 这个版本和gymnasium[all]0.29.1兼容
 pettingzoo 1.24.3
 ```
+
+基础依赖
+```bash
+torch >= 2.3.1 
+gymnasium >= 1.0.0 # 简单环境
+numpy >= 1.26.3
+tensorboard>=2.19.0
+```
+
+
 ## 效果
 用DQN算法在LunarLander-v2环境下训练500个轮次的3个seed的效果：线为均值，阴影为方差
 ![alt text](DQN_file/learning_curves/LunarLander-v2/DQN.png)
@@ -36,8 +46,11 @@ pettingzoo 1.24.3
 ## 显示训练
 训练时，使用tensorboard来显示实时的学习曲率。
 
-在DQN_file（算法）文件夹下，D:FreeRL/DQN_file 终端里输入：
+```bash
+## 先激活环境
 tensorboard --logdir=results/env_name
+```
+
 在跳出的http://localhost:6008/ 按住ctrl点击进入就行。
 
 tensorboard保存的文件events.out.tfevents.和模型的位置一致。
@@ -90,19 +103,47 @@ tensorboard保存的文件events.out.tfevents.和模型的位置一致。
 1.MAPPO_attention.py 加入了attention机制  
 2.**HAPPO.py** 为MAPPO基础之上的改进  
 3.**MAT.py** 以HAPPO为基础，引入了transformer    
+4.**IPPO.py** 以PPO为基础，拓展到多智能体的实现，适用于博弈环境（自己写的实现）
 
 * MAAC  
-1.MASAC.py (自己写的版本,只有continue版本)  
+1.**MASAC.py** (自己写的版本,只有continue版本)  
 2.MAAC_discrete.py (根据论文复刻的版本)  
 
 * MORL    
 1.ENVELOPE_DQN.py  
-2.ENVELOPE_DDPG.py  
+2.ENVELOPE_DDPG.py    
+
 * REINFORCE  
 1.REINFORCE.py    
 
 CEM_RL：
 * CEM_GD3PG(已成功复现,未加评估)
+
+## 引用说明
+如果您在研究或项目中使用了FreeRL，请按以下格式引用：  
+学术引用（BibTeX格式）：
+```bibtex
+@misc{FreeRL2025,
+  author = {Gu Jiacheng},
+  title = {FreeRL: A Free and Flexible Reinforcement Learning Library}, 
+  year = {2025},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/wild-firefox/FreeRL}},
+  note = {Open-source library for RL algorithms and tools.} 
+}
+```
+项目文档中的引用
+在项目文档或README中，请包含以下内容：
+```markdown
+本项目使用了FreeRL (https://github.com/wild-firefox/FreeRL) 库。
+```
+代码中的引用
+在使用FreeRL的代码中，建议添加如下注释：
+```python
+# This code utilizes FreeRL framework
+# https://github.com/wild-firefox/FreeRL
+```
 
 --- 2025.3.22 更新 ---  
 MARL的学习率总结：AC学习率一致（针对env.step(),智能体个数为3的情况下,其他未提到的学习率均不收敛/收敛不明显）  
@@ -115,5 +156,5 @@ MASAC:1e-4
 MAAC_discrete:5e-4  
 MAT：1e-4  
 
-待完善：
-1.MAT的discrete的效果收敛实验，算法没复现好  
+--- 2025.4.17 更新 --- 
+解决了MAPPO,HAPPO,MAT的discrete不收敛情况，加入了IPPO的实现。

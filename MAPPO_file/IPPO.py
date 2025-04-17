@@ -19,84 +19,18 @@ import argparse
 ## tricks
 from normalization import Normalization,RewardScaling
 
-## 改进
-from attention import Attention,Attention_Critic
-
 ## 其他
 from torch.utils.tensorboard import SummaryWriter
 import time
 import re
 import pickle 
 
-''' mappo:论文链接：https://arxiv.org/pdf/2103.01955 代码链接：https://github.com/marlbenchmark/on-policy/
-提出的建议
-1.使用值value归一化来稳定价值函数。（注：不是状态归一，技巧为PopArt，(Preserving Outputs Precisely, while Adaptively Rescaling Targets) 来自文献Learning values across many orders of magnitude:https://arxiv.org/pdf/1602.07714  / 拓展：Multi-task Deep Reinforcement Learning with popart）
-2.如果可以，使用必要的全局状态和本地状态。
-3.在困难环境中最多使用10个epoch(10 or 5)，在简单环境中最多使用15个epoch;避免分成多个batch(1个效果最好)（PPO原论文中是分成horizon//mini_batch_size个)
-4.为获得最高PPO性能，将clip值在0.2以下范围内调整。（论文中0.2和0.05效果还行）
-5.使用一个较大的batch_size(即horizon值)以达到最好的效果，然后调整它来优化效果。
+''' ippo:论文链接：https://arxiv.org/pdf/2011.09533 无参考代码，自写
 
-论文代码中使用的PPO技巧trick: 参考知乎:https://zhuanlan.zhihu.com/p/386559032
-1.Generalized Advantage Estimation：这个技巧来自文献：Hign-dimensional continuous control using generalized advantage estimation。
-2.Input Normalization
-3.Value Clipping：与策略截断类似，将值函数进行一个截断。
-4.Relu activation with Orthogonal Initialization： 论文：https://arxiv.org/pdf/2004.05867v2
-5.Gredient Clipping：梯度更新不要太大。
-6.Layer Normalization：## 来自同名论文 ###后面文献并无提及LayerNorm 怀疑作者贴错了  这个技巧来自文献：Regularization matters in policy optimization-an empirical study on continuous control。
-7.Soft Trust-Region Penalty：## 这个技巧来自文件：Revisiting design choices in proximal policy optimization。
-## 还有一些其他技巧 知乎上没提到但是论文和代码上有,补充如下
-8.huber_loss: 用于替代mse_loss，减少outlier的影响。
-9.reward normalization: 对reward进行归一化。
-10.use_feature_normalization :类似于Layer Normalization,在特征输入前采取的归一化操作
-11.adm_eps: 与PPO_with_tricks一致
-12.lr_decay: 与PPO_with_tricks一致
+每个智能体仅估计其局部价值函数,完全去中心化,故称之为独立PPO (IPPO)。
+实际上，只是在PPO外面套了一个for循环而已。
+
 '''
-
-## 先写一个简单的continue环境实现：
-'''
-关于建议
-1.由于在ddpg中发现建议1中的popart效果并不理想，所以这里不使用popart
-2.知乎上的评论：论证了建议2中可以不用特别加入agent-specific information,所以按一般MA拼接状态和动作处理，PPO无动作 只拼接状态
-3.设置epocch = 5 ; minibatch_size = 1 (即:不再进行对batch_size进行小批量,在我这相当于该值与horizon相等 )#后者我做过实验，效果确实会好一点点,见PPO_file中note
-4.设置clip = 0.2
-5.和原ppo一样看情况调整horizon
-
-综上:关注3，4即可
-
-关于args.trick:  trick为PPO_file中PPO_with_tricks.py中已实现过的trick
-1.使用GAE 与原PPO一致
-2.Input Normalization 即trick中的ObsNorm 确实重要
-3.Value Clipping 新增
-4.Orthogonal Initialization 即trick中的orthogonal_init
-5.Gredient Clipping PPO中默认加入以防止梯度爆炸和消失 
-6.Layer Normalization 新增
-7.Soft Trust-Region Penalty 新增 ## 在trpo用到，在PPO没有用到
-8.huber_loss 新增
-9.reward normalization 即trick中reward_norm or reward_scaling
-10.use_feature_normalization 新增
-11.adm_eps 即trick中的adam_eps
-12.lr_decay 即trick中的lr_decay
-
-# 综上：重点关注3,6,7 (实际加入2,3,4,6,7,8,9,10,11 trick) 1 5 默认加入
-综上：PPO_with_tricks.py中的7个trick全部加入了,(其中tanh的trick集成在net_init中,且默认使用relu,故上述中没有提及)
-重点关注3,6,7,8,10
-
-另外:
-mappo与rmappo区别见原代码:https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/scripts/train/train_mpe.py#L68
-区别：rmappo使用了RNN
-
-注：这里MAPPO 为复刻的论文代码
-MAPPO_simple为不加任何trick的代码
-
-疑问：
-从代码：https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/runner/separated/mpe_runner.py#L126
-（action_env = np.squeeze(np.eye(self.envs.action_space[agent_id].n)[action], 1)）
-及 https://github.com/marlbenchmark/on-policy/blob/main/onpolicy/envs/mpe/environment.py#L206
-（if action[0] == 1:）
-这里两处矛盾 推出原论文作者并没有使用mpe的离散环境做实验，
-且此代码实现效果和https://blog.csdn.net/onlyyyyyyee/article/details/139331501类似 所以推测复现代码实现并无错误。  
-'''
-
 
 ## 第一部分：定义Agent类
 def net_init(m,gain=None,use_relu = True):
@@ -127,6 +61,7 @@ class Actor(nn.Module):
         self.l2 = nn.Linear(hidden_1, hidden_2)
         self.mean_layer = nn.Linear(hidden_2, action_dim)
         self.log_std = nn.Parameter(torch.zeros(1, action_dim)) # 与PPO.py的方法一致：对角高斯函数
+        #self.log_std_layer = nn.Linear(hidden_2, action_dim) # 式2
 
         self.trick = trick
         # 使用 orthogonal_init
@@ -148,6 +83,7 @@ class Actor(nn.Module):
         mean = torch.tanh(self.mean_layer(x))  # 使得mean在-1,1之间
 
         log_std = self.log_std.expand_as(mean)  # 使得log_std与mean维度相同 输出log_std以确保std=exp(log_std)>0
+        #log_std = self.log_std_layer(x) # 式2
         log_std = torch.clamp(log_std, -20, 2) # exp(-20) - exp(2) 等于 2e-9 - 7.4，确保std在合理范围内
         std = torch.exp(log_std)
 
@@ -169,22 +105,27 @@ class Actor_discrete(nn.Module):
 
     def forward(self, obs ):
         if self.trick['feature_norm']:
-            x = F.layer_norm(obs, obs.size()[1:])
+            obs = F.layer_norm(obs, obs.size()[1:])
         x = F.relu(self.l1(obs))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
         x = F.relu(self.l2(x))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
-        a_prob = torch.softmax(self.l3(x), dim=1)
+        a_prob = torch.softmax(self.l3(x), dim=-1)
         return a_prob
         
 class Critic(nn.Module):
+    id_num : int = 0
     def __init__(self, dim_info:dict[str,list], hidden_1=128 , hidden_2=128,trick = None):
         super(Critic, self).__init__()
-        global_obs_dim = sum(val[0] for val in dim_info.values())  
+        # 智能体编号
+        self.id = Critic.id_num
+        Critic.id_num += 1
+        '''  各自的obs_dim '''
+        obs_dim = list(dim_info.values())[self.id][0] # 当前智能体的obs_dim
         
-        self.l1 = nn.Linear(global_obs_dim, hidden_1)
+        self.l1 = nn.Linear(obs_dim, hidden_1)
         self.l2 = nn.Linear(hidden_1, hidden_2)
         self.l3 = nn.Linear(hidden_2, 1)
         
@@ -196,7 +137,7 @@ class Critic(nn.Module):
             net_init(self.l3)  
         
     def forward(self, s): # 传入全局观测和动作
-        s = torch.cat(list(s), dim = 1)
+        #s = torch.cat(list(s), dim = 1)
         #sa = torch.cat([s,a], dim = 1)
         if self.trick['feature_norm']:
             s = F.layer_norm(s, s.size()[1:])
@@ -212,16 +153,13 @@ class Critic(nn.Module):
         return q
     
 class Agent:
-    def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, is_continue, device, trick, improment,attention_block=None):   
+    def __init__(self, obs_dim, action_dim, dim_info,actor_lr, critic_lr, is_continue, device,trick):   
         
         if is_continue:
             self.actor = Actor(obs_dim, action_dim,trick=trick ).to(device)
         else:
             self.actor = Actor_discrete(obs_dim, action_dim, trick=trick).to(device)
-        if improment['attention']:
-            self.critic = Attention_Critic(dim_info, is_continue=is_continue, attention_block=attention_block,trick=trick).to(device)
-        else:
-            self.critic = Critic( dim_info ,trick=trick).to(device)
+        self.critic = Critic( dim_info ,trick=trick).to(device)
 
         if trick['adam_eps']:
             self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, eps=1e-5)
@@ -249,16 +187,12 @@ def huber_loss(e, d):
     b = (abs(e) > d).float()
     return a*e**2/2 + b*d*(abs(e)-d/2)
 
-class MAPPO: 
-    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, horizon, device, trick = None,improment = None):        
+class IPPO: 
+    def __init__(self, dim_info, is_continue, actor_lr, critic_lr, horizon, device, trick = None):        
         self.agents  = {}
         self.buffers = {}
-
-        attention_block = None
-        if improment['attention']:
-            attention_block = Attention()
         for agent_id, (obs_dim, action_dim) in dim_info.items():
-            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, is_continue, device,trick,improment,attention_block)
+            self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, is_continue, device,trick)
             self.buffers[agent_id] = Buffer_for_PPO(horizon, obs_dim, act_dim = action_dim if is_continue else 1, device = device)
 
         self.device = device
@@ -268,7 +202,6 @@ class MAPPO:
         self.horizon = int(horizon)
 
         self.trick = trick
-        self.num_agents = len(self.agents) 
 
         if self.trick['lr_decay']:
             self.actor_lr = actor_lr
@@ -314,51 +247,30 @@ class MAPPO:
         for agent_id, buffer in self.buffers.items():
             buffer.add(obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id], action_log_pi[agent_id] , adv_dones[agent_id])
 
-    def all(self):
-        obs = {}
-        action = {}
-        reward = {}
-        next_obs = {}
-        done = {}
-        action_log_pi = {}
-        adv_dones = {}
-        for agent_id, buffer in self.buffers.items():
-            obs[agent_id], action[agent_id], reward[agent_id], next_obs[agent_id], done[agent_id], action_log_pi[agent_id], adv_dones[agent_id] = buffer.all()
-        return obs, action, reward, next_obs, done, action_log_pi, adv_dones
 
     ## PPO算法相关
     def learn(self, minibatch_size, gamma, lmbda ,clip_param, K_epochs, entropy_coefficient, huber_delta = None):
-         # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
-        obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.all()
-        # 计算GAE
-        with torch.no_grad():  # adv and v_target have no gradient
-            adv = torch.zeros(self.horizon, self.num_agents)
-            gae = 0
-            vs = []
-            vs_ = []
-            for agent_id  in self.buffers.keys():
-                vs.append(self.agents[agent_id].critic(obs.values()))  # batch_size x 1
-                vs_.append(self.agents[agent_id].critic(next_obs.values()))
-            
-            vs = torch.cat(vs, dim = 1) # batch_size x 3
-            vs_ = torch.cat(vs_, dim = 1) # batch_size x 3
+        # 多智能体特有-- 集中式训练critic:要用到所有智能体next状态和动作
+        for agent_id in self.agents.keys():
+            obs, action, reward, next_obs, done , action_log_pi , adv_dones = self.buffers[agent_id].all()
+            # 计算GAE
+            with torch.no_grad():  # adv and v_target have no gradient
+                adv = np.zeros(self.horizon)
+                gae = 0
+                vs = self.agents[agent_id].critic(obs)
+                vs_ = self.agents[agent_id].critic(next_obs)
+                td_delta = reward + gamma * (1.0 - done) * vs_ - vs
+                td_delta = td_delta.reshape(-1).cpu().detach().numpy()
+                adv_dones = adv_dones.reshape(-1).cpu().detach().numpy()
+                for i in reversed(range(self.horizon)):
+                    gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
+                    adv[i] = gae
+                adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
+                v_target = adv + vs  
+                if self.trick['adv_norm']:  
+                    adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
+                  
 
-            reward = torch.cat(list(reward.values()), dim = 1) # 
-            done = torch.cat(list(done.values()), dim = 1)
-            adv_dones = torch.cat(list(adv_dones.values()), dim = 1)
-
-            td_delta = reward + gamma * (1.0 - done) * vs_ - vs  #这里可能使用全局的reward
-            
-            for i in reversed(range(self.horizon)):
-                gae = td_delta[i] + gamma * lmbda * gae * (1.0 - adv_dones[i])
-                adv[i] = gae
-
-            adv = adv.to(self.device)
-            v_target = adv + vs  # batch_size x 3
-            if self.trick['adv_norm']:  
-                adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
-
-        for agent_id, agent in self.agents.items():
             # Optimize policy for K epochs:
             for _ in range(K_epochs): 
                 # 随机打乱样本 并 生成小批量
@@ -367,27 +279,25 @@ class MAPPO:
                 for index in indexes:
                     # 先更新actor
                     if self.is_continue:
-                        mean, std = self.agents[agent_id].actor(obs[agent_id][index])
+                        mean, std = self.agents[agent_id].actor(obs[index])
                         dist_now = Normal(mean, std)
                         dist_entropy = dist_now.entropy().sum(dim = 1, keepdim=True)  # mini_batch_size x action_dim -> mini_batch_size x 1
-                        action_log_pi_now = dist_now.log_prob(action[agent_id][index]) # mini_batch_size x action_dim
+                        action_log_pi_now = dist_now.log_prob(action[index]) # mini_batch_size x action_dim
                     else:
-                        dist_now = Categorical(probs=self.agents[agent_id].actor(obs[agent_id][index]))
+                        dist_now = Categorical(probs=self.agents[agent_id].actor(obs[index]))
                         dist_entropy = dist_now.entropy().reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
-                        action_log_pi_now = dist_now.log_prob(action[agent_id][index].reshape(-1)).reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
+                        action_log_pi_now = dist_now.log_prob(action[index].reshape(-1)).reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
 
-                    ratios = torch.exp(action_log_pi_now.sum(dim = 1, keepdim=True) - action_log_pi[agent_id][index].sum(dim = 1, keepdim=True))  # shape(mini_batch_size X 1)
+                    ratios = torch.exp(action_log_pi_now.sum(dim = 1, keepdim=True) - action_log_pi[index].sum(dim = 1, keepdim=True))  # shape(mini_batch_size X 1)
                     surr1 = ratios * adv[index]   # mini_batch_size x 1
                     surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
                     actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()
-                    agent.update_actor(actor_loss)
+                    self.agents[agent_id].update_actor(actor_loss)
 
                     # 再更新critic
-                    obs_ = {agent_id: obs[agent_id][index] for agent_id in obs.keys()}
-
-                    v_s = self.agents[agent_id].critic(obs_.values()) # mini_batch_size x 1
-                    v_s = v_s.repeat(1,self.num_agents) # mini_batch_size x 3
-
+                    #obs_ = {agent_id: obs[index] for agent_id in self.agents.keys()}
+                    #obs_ = obs[index]
+                    v_s = self.agents[agent_id].critic(obs[index])
                     v_target_ = v_target[index]
                     if self.trick['ValueClip']:
                         ''' 参考原mappo代码,原代码存储了return和value值,故实现上和如下有些许差异'''
@@ -404,7 +314,8 @@ class MAPPO:
                             critic_loss = huber_loss(v_target_-v_s,huber_delta).mean()
                         else:
                             critic_loss = F.mse_loss(v_target_, v_s)
-                    agent.update_critic(critic_loss)
+                    self.agents[agent_id].update_critic(critic_loss)
+        
 
         ## 清空buffer
         for buffer in self.buffers.values():
@@ -423,14 +334,14 @@ class MAPPO:
     def save(self, model_dir):
         torch.save(
             {name: agent.actor.state_dict() for name, agent in self.agents.items()},
-            os.path.join(model_dir, 'MAPPO.pth')
+            os.path.join(model_dir, 'IPPO.pth')
         )
         
     ## 加载模型
     @staticmethod 
     def load(dim_info, is_continue, model_dir,trick=None):
-        policy = MAPPO(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, horizon = 0, device = 'cpu',trick=trick)
-        data = torch.load(os.path.join(model_dir, 'MAPPO.pth'))
+        policy = IPPO(dim_info, is_continue = is_continue, actor_lr = 0, critic_lr = 0, horizon = 0, device = 'cpu',trick=trick)
+        data = torch.load(os.path.join(model_dir, 'IPPO.pth'))
         for agent_id, agent in policy.agents.items():
             agent.actor.load_state_dict(data[agent_id])
         return policy
@@ -474,7 +385,7 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
     os.makedirs(env_dir) if not os.path.exists(env_dir) else None
     print('trick:',trick)
     # 确定前缀
-    if trick is None or not any(trick.values()) or policy_name =='MAPPO' or policy_name =='MAPPO_attention':
+    if trick is None or not any(trick.values()) or policy_name =='IPPO':
         prefix = policy_name + '_'
     else:
         prefix = policy_name + '_'
@@ -492,39 +403,38 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
 ''' 
 环境见:simple_adversary_v3,simple_crypto_v3,simple_push_v3,simple_reference_v3,simple_speaker_listener_v3,simple_spread_v3,simple_tag_v3
 具体见:https://pettingzoo.farama.org/environments/mpe
-注意：环境中N个智能体的设置
+注意：环境中N个智能体的设置   
 '''
-# 24 : 0 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
-    parser.add_argument("--N", type=int, default=30) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--env_name", type = str,default="simple_adversary_v3") 
+    parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
+    parser.add_argument("--continuous_actions", type=bool, default=False) #默认True 
     # 共有参数
-    parser.add_argument("--seed", type=int, default=0) # 0 10 100 
+    parser.add_argument("--seed", type=int, default=100) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(5000))
     parser.add_argument("--save_freq", type=int, default=int(5000//4))
-    parser.add_argument("--start_steps", type=int, default=0) # 满足此开始更新 此算法  不用
+    parser.add_argument("--start_steps", type=int, default=0) # 满足此开始更新 此算法不用
     parser.add_argument("--random_steps", type=int, default=0)  # 满足此开始自己探索
     parser.add_argument("--learn_steps_interval", type=int, default=0) # 这个算法不方便用
     # 训练参数
-    parser.add_argument("--gamma", type=float, default=0.95)
+    parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--tau", type=float, default=0.01)
     ## A-C参数   
-    parser.add_argument("--actor_lr", type=float, default=1e-3)   
+    parser.add_argument("--actor_lr", type=float, default=1e-3)
     parser.add_argument("--critic_lr", type=float, default=1e-3)
     # PPO独有参数
-    parser.add_argument("--horizon", type=int, default=256) 
+    parser.add_argument("--horizon", type=int, default=256) # 
     parser.add_argument("--clip_param", type=float, default=0.2)
     parser.add_argument("--K_epochs", type=int, default=15) # 15 # 困难任务建议设置为5
     parser.add_argument("--entropy_coefficient", type=float, default=0.01)
-    parser.add_argument("--minibatch_size", type=int, default=256) 
+    parser.add_argument("--minibatch_size", type=int, default=256)  
     parser.add_argument("--lmbda", type=float, default=0.95) # GAE参数
     ## mappo 参数
     parser.add_argument("--huber_delta", type=float, default=10.0) # huber_loss参数
     # trick参数
-    parser.add_argument("--policy_name", type=str, default='MAPPO_attention') #此代码只用于MAPPO_attention.py
+    parser.add_argument("--policy_name", type=str, default='IPPO') # IPPO / IPPO_simple
     parser.add_argument("--trick", type=dict, default={'adv_norm':False,
                                                         'ObsNorm':False,
                                                         'reward_norm':False,'reward_scaling':False,    # or
@@ -533,40 +443,26 @@ if __name__ == '__main__':
                                                        'ValueClip':False,'huber_loss':False,
                                                        'LayerNorm':False,'feature_norm':False,
                                                        })  
-    ## 改进
-    parser.add_argument("--improvement", type=dict, default={'attention':False})  
     # device参数   
-    parser.add_argument("--device", type=str, default='cpu') # cpu/cuda
+    parser.add_argument("--device", type=str, default='cuda') # cpu/cuda
 
     args = parser.parse_args()
     # 检查 reward_norm 和 reward_scaling 的值
     if args.trick['reward_norm'] and args.trick['reward_scaling']:
         raise ValueError("reward_norm 和 reward_scaling 不能同时为 True")
     
-    if args.policy_name != 'MAPPO_attention' :
-        if  args.policy_name == 'MAPPO' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay'])) :
-            args.policy_name = 'MAPPO'
-            for key in args.trick.keys():
-                if key not in ['reward_norm','lr_decay']:
-                    args.trick[key] = True
-                else:
-                    args.trick[key] = False
-        
-                
-        if args.policy_name == 'MAPPO_simple' or (not any(args.trick.values())) : # if all(value is False for value in args.trick.values()):
-            args.policy_name = 'MAPPO_simple'
-            for key in args.trick.keys():
-                args.trick[key] = False
-    
-
-    if args.policy_name == 'MAPPO_attention' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay']) and args.improvement['attention']):
-        args.policy_name = 'MAPPO_attention'
+    if  args.policy_name == 'IPPO' or ((args.trick['lr_decay'] is False ) and all(value  for key, value in args.trick.items() if key not in ['reward_norm','lr_decay'])) :
+        args.policy_name = 'IPPO'
         for key in args.trick.keys():
             if key not in ['reward_norm','lr_decay']:
                 args.trick[key] = True
             else:
                 args.trick[key] = False
-        args.improvement['attention'] = True
+    
+    if args.policy_name == 'IPPO_simple' or (not any(args.trick.values())) : # if all(value is False for value in args.trick.values()):
+        args.policy_name = 'IPPO_simple'
+        for key in args.trick.keys():
+            args.trick[key] = False
 
     print(args)
     print('-' * 50)
@@ -594,7 +490,7 @@ if __name__ == '__main__':
     device = torch.device(args.device) if torch.cuda.is_available() else torch.device('cpu')
 
     ## 算法配置
-    policy = MAPPO(dim_info, is_continue, args.actor_lr, args.critic_lr, args.horizon, device, args.trick,args.improvement)
+    policy = IPPO(dim_info, is_continue, args.actor_lr, args.critic_lr, args.horizon, device, args.trick)
 
     time_ = time.time()
     ## 训练
@@ -603,7 +499,7 @@ if __name__ == '__main__':
     env_agents = [agent_id for agent_id in env.agents]
     episode_reward = {agent_id: 0 for agent_id in env_agents}
     train_return = {agent_id: [] for agent_id in env_agents}
-    obs,info = env.reset(seed=args.seed)
+    obs,info = env.reset(seed = args.seed)
     {agent: env.action_space(agent).seed(seed = args.seed) for agent in env_agents}  # 针对action复现:env.action_space.sample()
 
     if args.trick['ObsNorm']:
@@ -626,13 +522,12 @@ if __name__ == '__main__':
         else:
             action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
             
-
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
         if args.trick['ObsNorm']:
             next_obs = {agent_id : obs_norm[agent_id](next_obs[agent_id]) for agent_id in env_agents }
         if args.trick['reward_norm'] or args.trick['reward_scaling']:
-            reward_ = {agent_id : reward_norm[agent_id](reward[agent_id]) for agent_id in env_agents}
+            reward_ = {agent_id : reward_norm[agent_id](reward[agent_id])[0] for agent_id in env_agents}
 
         done = {agent_id: terminated[agent_id] or truncated[agent_id] for agent_id in env_agents}
         done_bool = {agent_id: terminated[agent_id]  for agent_id in env_agents} ### truncated 为超过最大步数
@@ -653,7 +548,7 @@ if __name__ == '__main__':
                 train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
-            obs,info = env.reset(seed=args.seed)
+            obs,info = env.reset(seed = args.seed)
             if args.trick['ObsNorm']:
                 obs = {agent_id : obs_norm[agent_id](obs[agent_id]) for agent_id in env_agents }
             if args.trick['reward_scaling']:

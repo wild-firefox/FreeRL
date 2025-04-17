@@ -60,3 +60,12 @@ HAPPO只实现了连续动作的实现，离散动作暂未实现，离散动作
 更多算法，效果如下：  
 MAT：1e-4    
 ![alt text](image_assist/image-4.png)
+
+---2025.4.17更新---
+
+终于发现自己实现的MAPPO.py的discrete环境下不能收敛的问题了。    
+是环境上的问题，算法上没问题， 将原来策略直接输出的action_,用int()转换成int类型就可以了。原因：PettingZoo的离散动作空间对np.array(0)的支持不友好，不如gymnasium的支持好。
+```
+action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
+```
+至此，HAPPO,MAT的discrete环境下也可以收敛了。

@@ -174,7 +174,7 @@ class Actor_discrete(nn.Module):
 
     def forward(self, obs ):
         if self.trick['feature_norm']:
-            x = F.layer_norm(obs, obs.size()[1:])
+            obs = F.layer_norm(obs, obs.size()[1:])
         x = F.relu(self.l1(obs))
         if self.trick['LayerNorm']:
             x = F.layer_norm(x, x.size()[1:])
@@ -506,9 +506,9 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
+    parser.add_argument("--env_name", type = str,default="simple_adversary_v3") 
     parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
-    parser.add_argument("--continuous_actions", type=bool, default=True) #默认True 
+    parser.add_argument("--continuous_actions", type=bool, default=True ) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100  
     parser.add_argument("--max_episodes", type=int, default=int(120000))
@@ -618,7 +618,7 @@ if __name__ == '__main__':
             action_ = {agent_id: np.clip(action[agent_id] * max_action, -max_action, max_action,dtype= np.float32) for agent_id in action}
             action_ = {agent_id: (action_[agent_id] + 1) / 2 for agent_id in env_agents}  # [-1,1] -> [0,1]
         else:
-            action_ = action
+            action_ = { agent_id: int(action[agent_id]) for agent_id in env_agents} ## 针对PettingZoo离散动作空间 np.array(0) -> int(0)
             
         # 探索环境
         next_obs, reward,terminated, truncated, infos = env.step(action_) 
@@ -641,9 +641,9 @@ if __name__ == '__main__':
             ## 显示
             if  (episode_num + 1) % 100 == 0:
                 print("episode: {}, reward: {}".format(episode_num + 1, episode_reward))
-                for agent_id in env_agents:
-                    writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
-                    train_return[agent_id].append(episode_reward[agent_id])
+            for agent_id in env_agents:
+                writer.add_scalar(f'reward_{agent_id}', episode_reward[agent_id], episode_num + 1)
+                train_return[agent_id].append(episode_reward[agent_id])
 
             episode_num += 1
             obs,info = env.reset(seed = args.seed) # env.reset(seed = args.seed)  # 针对obs复现:env.reset()

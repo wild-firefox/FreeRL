@@ -323,6 +323,66 @@ class Buffer_for_PPO:
         return obs, actions, rewards, next_obs, dones , actions_log_probs, adv_dones
 
 
+class Buffer_for_PPO_ippo:
+    """replay buffer for each agent ippo test"""
+
+    def __init__(self, capacity, obs_dim, act_dim, device, trick = None):
+        self.capacity = capacity = int(capacity)
+
+        self.obs = np.zeros((capacity, obs_dim))    # batch_size x state_dim
+        self.actions = np.zeros((capacity, act_dim))  # batch_size x action_dim
+        self.rewards = np.zeros(capacity)            # just a tensor with length: batch
+        self.next_obs = np.zeros((capacity, obs_dim))  # batch_size x state_dim
+        self.dones = np.zeros(capacity, dtype=bool)    # just a tensor with length: batch_size
+        
+        if trick is not None and trick['decaystd']:
+            self.action_log_probs = np.zeros((capacity)) 
+        else:
+            self.action_log_probs = np.zeros((capacity, act_dim)) 
+        self.adv_dones = np.zeros(capacity, dtype=bool)    
+
+        self._index = 0
+        self._size = 0
+
+        self.device = device
+
+    def add(self, obs, action, reward, next_obs, done, action_log_probs, adv_done):
+        """ add an experience to the memory """ #
+        self.obs[self._index] = obs
+        self.actions[self._index] = action
+        self.rewards[self._index] = reward
+        self.next_obs[self._index] = next_obs
+        self.dones[self._index] = done
+
+        self.action_log_probs[self._index] = action_log_probs
+        self.adv_dones[self._index] = adv_done
+
+        self._index = (self._index + 1) % self.capacity
+        if self._size < self.capacity:
+            self._size += 1
+
+    # __len__ is a magic method in Python 可以让对象实现len()方法
+    def __len__(self):
+        return self._size
+    
+    # 清空buffer
+    def clear(self):
+        self._index = 0
+        self._size = 0
+
+    def all(self):
+        obs = torch.as_tensor(self.obs,dtype=torch.float32).to(self.device)  # torch.Size([batch_size, state_dim])
+        actions = torch.as_tensor(self.actions,dtype=torch.float32).to(self.device) # torch.Size([batch_size, action_dim])
+        rewards = torch.as_tensor(self.rewards,dtype=torch.float32).reshape(-1,1).to(self.device)  # torch.Size([batch_size]) -> torch.Size([batch_size, 1])
+        # reward = (reward - reward.mean()) / (reward.std() + 1e-7)
+        next_obs = torch.as_tensor(self.next_obs,dtype=torch.float32).to(self.device)  # torch.Size([batch_size, state_dim])
+        dones = torch.as_tensor(self.dones,dtype=torch.float32).reshape(-1,1).to(self.device)
+
+        actions_log_probs = torch.as_tensor(self.action_log_probs,dtype=torch.float32).to(self.device) # torch.Size([batch_size, action_dim])
+        adv_dones = torch.as_tensor(self.adv_dones,dtype=torch.float32).reshape(-1,1).to(self.device)
+        
+        return obs, actions, rewards, next_obs, dones , actions_log_probs, adv_dones
+
 class ReplayBuffer:
     ''' buffer for MAPPO_discrete '''
     def __init__(self, N,obs_dim, state_dim, episode_limit, batch_size, device):
