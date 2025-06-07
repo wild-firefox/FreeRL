@@ -15,7 +15,8 @@
 由于参考了ElegentRL和Easy的库,from easy to elegent 故起名为freeRL,  
 free也是希望写出的代码可以随意的,自由的从此代码移植到自己的代码上。  
 库的介绍：[【FreeRL】我的深度学习库构建思想](https://blog.csdn.net/weixin_56760882/article/details/142176797)  
-库的不定时更新的博客：[CSDN:荒野火狐](https://blog.csdn.net/weixin_56760882)
+库的不定时更新的博客：[CSDN:荒野火狐](https://blog.csdn.net/weixin_56760882)  
+更多项目见：[FreeRL_for_play](https://github.com/wild-firefox/FreeRL_for_play)
 
 ## python环境
 ```python
