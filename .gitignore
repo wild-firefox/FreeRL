@@ -18,4 +18,8 @@ test copy.py
 /PPO_advance/results
 /PPO_advance/__pycache__
 
-#/PPO_advance/
+/PPO_file/results
+/PPO_ddp
+/PPO_file/test.ipynb
+
+/MAPPO_file/results

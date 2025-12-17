@@ -19,6 +19,8 @@ import re
 import time
 from torch.utils.tensorboard import SummaryWriter
 
+from c_adamw import AdamW
+
 '''
 一个深度强化学习算法分三个部分实现：
 1.Agent类:包括actor、critic、target_actor、target_critic、actor_optimizer、critic_optimizer、
@@ -83,7 +85,8 @@ class Actor_discrete(nn.Module):
     def forward(self, obs ):
         x = F.relu(self.l1(obs))
         x = F.relu(self.l2(x))
-        a_prob = torch.softmax(self.l3(x), dim=1)
+        #a_prob = torch.softmax(self.l3(x), dim=1)
+        a_prob = self.l3(x)
         return a_prob
     
 '''   
@@ -112,8 +115,11 @@ class Agent:
             self.actor = Actor_discrete(obs_dim, action_dim, ).to(device)
         self.critic = Critic( obs_dim ).to(device)
 
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+        # self.actor_optimizer = AdamW(self.actor.parameters(), lr=actor_lr)
+        # self.critic_optimizer = AdamW(self.critic.parameters(), lr=critic_lr)
+        ####
+        self.ac_optimizer = AdamW(list(self.actor.parameters()) + list(self.critic.parameters()), lr=actor_lr)
+
 
     def update_actor(self, loss):
         self.actor_optimizer.zero_grad()
@@ -126,6 +132,24 @@ class Agent:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
         self.critic_optimizer.step()
+
+    def update_ac(self,loss_actor, loss_critic):
+        self.actor_optimizer.zero_grad()
+        self.critic_optimizer.zero_grad()
+        (loss_actor+loss_critic).backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+        self.actor_optimizer.step()
+        self.critic_optimizer.step()
+    
+    def update_ac_(self, loss_actor, loss_critic):  # 合并更新
+        self.ac_optimizer.zero_grad()
+        #(loss_actor+loss_critic).backward()
+        loss_actor.backward()
+        loss_critic.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+        self.ac_optimizer.step()
 
 ## 第二部分：定义DQN算法类
 class PPO:
@@ -149,7 +173,7 @@ class PPO:
             action = dist.sample()
             action_log_pi = dist.log_prob(action) # 1xaction_dim
         else:
-            dist = Categorical(probs=self.agent.actor(obs))
+            dist = Categorical(logits=self.agent.actor(obs))
             action = dist.sample()
             action_log_pi = dist.log_prob(action)
         # to 真实值
@@ -230,7 +254,7 @@ class PPO:
                     dist_entropy = dist_now.entropy().sum(dim = 1, keepdim=True)  # mini_batch_size x action_dim -> mini_batch_size x 1
                     action_log_pi_now = dist_now.log_prob(action[index]) # mini_batch_size x action_dim 
                 else:
-                    dist_now = Categorical(probs=self.agent.actor(obs[index]))
+                    dist_now = Categorical(logits=self.agent.actor(obs[index]))
                     dist_entropy = dist_now.entropy().reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
                     action_log_pi_now = dist_now.log_prob(action[index].reshape(-1)).reshape(-1,1) # mini_batch_size  -> mini_batch_size x 1
                 '''
@@ -242,7 +266,7 @@ class PPO:
                 surr1 = ratios * adv[index]  
                 surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
                 actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()
-                self.agent.update_actor(actor_loss)
+                #self.agent.update_actor(actor_loss)
                 '''or  (mean -> 转换为标量)
                 actor_loss = -torch.min(surr1, surr2) - entropy_coefficient * dist_entropy
                 self.agent.update_actor(actor_loss.mean())
@@ -251,7 +275,12 @@ class PPO:
                 # 再更新critic
                 v_s = self.agent.critic(obs[index])
                 critic_loss = F.mse_loss(v_target[index], v_s)
-                self.agent.update_critic(critic_loss)
+                #self.agent.update_critic(critic_loss)
+
+                ## 测试优化器 loss相加 与 分开 是否有区别 无区别
+                #self.agent.update_ac(actor_loss, critic_loss)
+                ### 合并测试
+                self.agent.update_ac_(actor_loss, critic_loss)
         
         ## 清空buffer
         self.buffer.clear()
@@ -270,7 +299,7 @@ class PPO:
 ## 第三部分：main函数   
 ''' 这里不用离散转连续域技巧'''
 def get_env(env_name,is_dis_to_con = False):
-    env = gym.make(env_name,continuous=True)  # 如需要使用LunarLander-v2的连续环境，这里需要加上continuous=True
+    env = gym.make(env_name)  # 如需要使用LunarLander-v2的连续环境，这里需要加上continuous=True
     if isinstance(env.observation_space, gym.spaces.Box):
         obs_dim = env.observation_space.shape[0]
     else:
@@ -327,10 +356,10 @@ reward_threshold：https://github.com/openai/gym/blob/master/gym/envs/__init__.p
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="LunarLander-v2") 
+    parser.add_argument("--env_name", type = str,default="Pendulum-v1") 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
-    parser.add_argument("--max_episodes", type=int, default=int(500))
+    parser.add_argument("--max_episodes", type=int, default=int(200))
     parser.add_argument("--save_freq", type=int, default=int(500//4))
     parser.add_argument("--start_steps", type=int, default=0) #ppo无此参数
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数

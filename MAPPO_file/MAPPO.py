@@ -225,34 +225,49 @@ class Agent:
         else:
             self.actor = Actor_discrete(obs_dim, action_dim, trick=trick).to(device)
         self.critic = Critic( dim_info ,trick=trick).to(device)
+        
+        self.ac_parameters = list(self.actor.parameters()) + list(self.critic.parameters(),)
+        self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr,eps=1e-5)
 
-        self.ac_parameters = list(self.actor.parameters()) + list(self.critic.parameters())
-        self.ac_optimizer = torch.optim.Adam(self.ac_parameters, lr= actor_lr)
-
-        if trick['adam_eps']:
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, eps=1e-5)
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr, eps=1e-5)
-        else:
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
-            self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+        ############
+        # if trick['adam_eps']:
+        #     self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr, eps=1e-5)
+        #     self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr, eps=1e-5)
+        # else:
+        #     self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_lr)
+        #     self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_lr)
+        
 
     def update_actor(self, loss):
         self.actor_optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        ###torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
         self.actor_optimizer.step()
 
     def update_critic(self, loss):
         self.critic_optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+        ###torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
         self.critic_optimizer.step()
 
-    def update_ac(self, loss):
+    def update_ac(self, actor_loss, critic_loss):  ## optimizer 改成这个结果不一致
         self.ac_optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.ac_parameters, 10)
+        #(actor_loss+critic_loss).backward()
+        actor_loss.backward()
+        critic_loss.backward()
+        #torch.nn.utils.clip_grad_norm_(self.ac_parameters, 10)
+        ###torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        ###torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
         self.ac_optimizer.step()
+    
+    def update_ac_(self, actor_loss, critic_loss):  ## 分开更新
+        self.actor_optimizer.zero_grad()
+        self.critic_optimizer.zero_grad()
+        (actor_loss+critic_loss).backward()
+        ###torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        ###torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+        self.critic_optimizer.step()
+        self.actor_optimizer.step()
 
 ## 第二部分：定义DQN算法类
 def huber_loss(e, d):
@@ -267,6 +282,11 @@ class MAPPO:
         for agent_id, (obs_dim, action_dim) in dim_info.items():
             self.agents[agent_id] = Agent(obs_dim, action_dim, dim_info, actor_lr, critic_lr, is_continue, device,trick)
             self.buffers[agent_id] = Buffer_for_PPO(horizon, obs_dim, act_dim = action_dim if is_continue else 1, device = device)
+
+        self.sum_optimizers = {
+            'actor_optimizer': torch.optim.Adam([p for agent in self.agents.values() for p in agent.actor.parameters()], lr=actor_lr),
+            'critic_optimizer': torch.optim.Adam([p for agent in self.agents.values() for p in agent.critic.parameters()], lr=critic_lr)
+        }
 
         self.device = device
         self.is_continue = is_continue
@@ -365,6 +385,9 @@ class MAPPO:
             if self.trick['adv_norm']:  
                 adv = ((adv - adv.mean()) / (adv.std() + 1e-8)) 
 
+        actor_loss_sum = 0
+        critic_loss_sum = 0  ## 放在下面
+
         for agent_id, agent in self.agents.items():
             # Optimize policy for K epochs:
             for _ in range(K_epochs): 
@@ -387,7 +410,7 @@ class MAPPO:
                     surr1 = ratios * adv[index]   # mini_batch_size x 1
                     surr2 = torch.clamp(ratios, 1 - clip_param, 1 + clip_param) * adv[index]  
                     actor_loss = -torch.min(surr1, surr2).mean() - entropy_coefficient * dist_entropy.mean()
-                    agent.update_actor(actor_loss)
+                    
 
                     # 再更新critic
                     obs_ = {agent_id: obs[agent_id][index] for agent_id in obs.keys()}
@@ -411,7 +434,47 @@ class MAPPO:
                             critic_loss = huber_loss(v_target_-v_s,huber_delta).mean()
                         else:
                             critic_loss = F.mse_loss(v_target_, v_s)
-                    agent.update_critic(critic_loss)
+                    #agent.update_actor(actor_loss)
+                    #agent.update_critic(critic_loss)
+                    ## 上两步 和这一步 看看效果是否一样
+                    #agent.update_ac_(actor_loss ,critic_loss )
+                    ## 下面是合并优化器的版本
+                    agent.update_ac(actor_loss ,critic_loss )
+
+
+                    actor_loss_sum += actor_loss
+                    critic_loss_sum += critic_loss
+            
+        # self.sum_optimizers['actor_optimizer'].zero_grad()
+        # actor_loss_sum.backward()
+        # ###torch.nn.utils.clip_grad_norm_(agent.actor.parameters(), 0.5)
+        # self.sum_optimizers['actor_optimizer'].step()
+
+        # self.sum_optimizers['critic_optimizer'].zero_grad()
+        # critic_loss_sum.backward()
+        # ###torch.nn.utils.clip_grad_norm_(agent.critic.parameters(), 0.5)
+        # self.sum_optimizers['critic_optimizer'].step()
+
+        # ##########
+        # # 合并损失
+        # total_loss = actor_loss_sum + critic_loss_sum
+
+        # # 清空两个优化器的梯度
+        # self.sum_optimizers['actor_optimizer'].zero_grad()
+        # self.sum_optimizers['critic_optimizer'].zero_grad()
+
+        # # 一次性反向传播
+        # total_loss.backward()
+
+        # # 分别更新
+        # # torch.nn.utils.clip_grad_norm_([p for agent in self.agents.values() for p in agent.actor.parameters()], 0.5)
+        # self.sum_optimizers['actor_optimizer'].step()
+
+        # # torch.nn.utils.clip_grad_norm_([p for agent in self.agents.values() for p in agent.critic.parameters()], 0.5)
+        # self.sum_optimizers['critic_optimizer'].step()
+        # ##########
+
+
         
 
         ## 清空buffer
@@ -507,12 +570,12 @@ def make_dir(env_name,policy_name = 'DQN',trick = None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # 环境参数
-    parser.add_argument("--env_name", type = str,default="simple_adversary_v3") 
+    parser.add_argument("--env_name", type = str,default="simple_spread_v3") 
     parser.add_argument("--N", type=int, default=None) # 环境中智能体数量 默认None 这里用来对比设置
     parser.add_argument("--continuous_actions", type=bool, default=True ) #默认True 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100  
-    parser.add_argument("--max_episodes", type=int, default=int(120000))
+    parser.add_argument("--max_episodes", type=int, default=int(200)) # 5000
     parser.add_argument("--save_freq", type=int, default=int(5000//4))
     parser.add_argument("--start_steps", type=int, default=0) # 满足此开始更新 此算法不用
     parser.add_argument("--random_steps", type=int, default=0)  # 满足此开始自己探索
@@ -576,6 +639,7 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     ### cuda
     torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)   ## 多卡随机数种子
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     print('Random Seed:',args.seed)
