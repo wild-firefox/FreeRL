@@ -32,3 +32,9 @@ test copy.py
 /GAIL_file/PPO2_for_MAIL.py
 /GAIL_file/layers.py
 /GAIL_file/GAIL copy.py
+
+/GAIL_file/logs/
+/GNN_RL/logs
+/GNN_RL/
+*/logs/
+*/__pycache__/

@@ -19,7 +19,8 @@ import re
 import time
 from torch.utils.tensorboard import SummaryWriter
 
-from c_adamw import AdamW
+#from c_adamw import AdamW
+from torch.optim import Adam
 
 '''
 一个深度强化学习算法分三个部分实现：
@@ -118,7 +119,7 @@ class Agent:
         # self.actor_optimizer = AdamW(self.actor.parameters(), lr=actor_lr)
         # self.critic_optimizer = AdamW(self.critic.parameters(), lr=critic_lr)
         ####
-        self.ac_optimizer = AdamW(list(self.actor.parameters()) + list(self.critic.parameters()), lr=actor_lr)
+        self.ac_optimizer = Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=actor_lr)
 
 
     def update_actor(self, loss):
@@ -231,8 +232,8 @@ class PPO:
                 adv[i] = gae
             adv = torch.as_tensor(adv,dtype=torch.float32).reshape(-1, 1).to(self.device) ## cuda
             v_target = adv + vs  
-            # if self.trick['adv_norm']:  # Trick :advantage normalization
-            #     adv = ((adv - adv.mean()) / (adv.std() + 1e-5)) 
+            if self.trick['adv_norm']:  # Trick :advantage normalization
+                adv = ((adv - adv.mean()) / (adv.std() + 1e-5)) 
         '''
         ## 计算log_pi_old 比较1
         mean , std = self.agent.actor(obs)
@@ -359,7 +360,7 @@ if __name__ == '__main__':
     parser.add_argument("--env_name", type = str,default="Pendulum-v1") 
     # 共有参数
     parser.add_argument("--seed", type=int, default=100) # 0 10 100
-    parser.add_argument("--max_episodes", type=int, default=int(200))
+    parser.add_argument("--max_episodes", type=int, default=int(500))
     parser.add_argument("--save_freq", type=int, default=int(500//4))
     parser.add_argument("--start_steps", type=int, default=0) #ppo无此参数
     parser.add_argument("--random_steps", type=int, default=0)  #dqn 无此参数

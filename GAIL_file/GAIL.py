@@ -95,7 +95,7 @@ class GAIL:
             disc_grad_penalty = torch.mean(disc_demo_grad)
             ######
 
-            d_loss += 5 * disc_grad_penalty
+            d_loss += 5 * disc_grad_penalty  # disc_grad_penalty 系数为5
 
             w_dis =  (torch.mean(expert_d_out) - torch.mean(policy_d_out))
             expert_prob = torch.sigmoid(expert_d_out).mean().item()

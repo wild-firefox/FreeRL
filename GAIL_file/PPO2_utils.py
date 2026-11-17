@@ -102,11 +102,12 @@ class gymEnvWrapper:
 
     def reset(self,): ## TODO
         state = self.env.reset(seed = self.seed)[0]
-        # 归一state 到[-1,1]：处理 inf 边界
-        low = self.env.observation_space.low
-        high = self.env.observation_space.high
-        if not (np.any(np.isinf(low)) or np.any(np.isinf(high))):
-            state = 2 * (state - low) / (high - low) - 1
+        if self.config['normalize_obs']:
+            # 归一state 到[-1,1]：处理 inf 边界
+            low = self.env.observation_space.low
+            high = self.env.observation_space.high
+            if not (np.any(np.isinf(low)) or np.any(np.isinf(high))):
+                state = 2 * (state - low) / (high - low) - 1
             
         return torch.as_tensor(state, dtype=torch.float32).to(self.device)
 
@@ -131,10 +132,12 @@ class gymEnvWrapper:
 
             info['terminate'] = torch.as_tensor(terminate, dtype=torch.float32).to(self.device)
 
-            low = self.env.observation_space.low
-            high = self.env.observation_space.high
-            if not (np.any(np.isinf(low)) or np.any(np.isinf(high))):
-                next_state = 2 * (next_state - low) / (high - low) - 1
+            if self.config['normalize_obs']:
+                # 归一state 到[-1,1]：处理 inf 边界
+                low = self.env.observation_space.low
+                high = self.env.observation_space.high
+                if not (np.any(np.isinf(low)) or np.any(np.isinf(high))):
+                    next_state = 2 * (next_state - low) / (high - low) - 1
                 
             return (torch.as_tensor(next_state, dtype=torch.float32).to(self.device),
                     torch.as_tensor(reward, dtype=torch.float32).to(self.device),

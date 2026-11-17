@@ -2,16 +2,18 @@ import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # 将需要复用的值存入变量
-run_id = 'Pendulum-v1' # 'CartPole-v1' ; 'Pendulum-v1'
+run_id = 'BipedalWalker-v3' #'BipedalWalker-v3'#'Pendulum-v1' # 'CartPole-v1' ; 'Pendulum-v1'
 
 s_dim ={
     'Pendulum-v1': 3,
     'CartPole-v1': 4,
+    'BipedalWalker-v3': 24,
 }
 
 a_dim = {
     'Pendulum-v1': 1,
     'CartPole-v1': 2,
+    'BipedalWalker-v3': 4,
 }
 
 GAIL_COBFIG = {
@@ -57,6 +59,10 @@ GAIL_COBFIG = {
         'mini_batch_size': 64,
         'eval_interval': 10,
         'eval_episodes':1,
+        
+        'use_sapo': False,
+        'sapo_tau_pos': 1.0,
+        'sapo_tau_neg': 1.0,
     },
 
     'D': {
@@ -77,13 +83,15 @@ PPO_COBFIG = {
     'id': run_id,
     'log_dir': f'logs/{run_id}',
     'algo': 'PPO',
-    'seed': 42,
+    'seed': 100,#42,
     'env_reproducible': True, # True 时 训练效果可复现
     'collect_eval_data': True,
 
     'num_workers': 1,
     'use_gpu': True,  # 确保启用GPU
 
+
+    'normalize_obs': False, # 是否归一化obs 到[-1,1]，如果环境obs空间有inf边界，建议设置为False
     # pendulum
     # 's_dim': 3,
     # 'a_dim': 1,
@@ -106,18 +114,32 @@ PPO_COBFIG = {
         'log_std_min': -10,
         'log_std_max': 2,
 
-        'p_lr': 1e-3,
-        'v_lr': 1e-3,
+        ## GAE
+        'adv_norm': True, # Trick :advantage normalization
+
+        'p_lr': 3e-4, #1e-3,
+        'v_lr': 3e-4, #1e-3,
         'horizon': 2048,
         'gamma': 0.99,
         'lam': 0.95,
         'clip_epsilon': 0.2,
-        'K_epochs': 10,
+        'K_epochs': 16, #10,
         'value_loss_coef': 1,
         'ent_weight': 0.01,
-        'mini_batch_size': 64,
-        'eval_interval': 2,
+        'mini_batch_size': 256,#64,
+        'eval_interval': 5, #2,
         'eval_episodes':1,
+        
+        'use_sapo': False,
+        'sapo_tau_pos': 15.0,
+        'sapo_tau_neg': 15.05,
+        
+        'use_fipo': True,
+        'fipo_decay_rate': 32,
+        'fipo_clip_range': 0.2,
+        'fipo_clip_high_only': True,
+        'fipo_delta': 10.0,
+        'fipo_safety_threshold': 4.0,
     },
 
 }

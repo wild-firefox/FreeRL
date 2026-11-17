@@ -1,7 +1,7 @@
 
 '''
 使用一种全新的PPO代码结构
-暂时适用：continue
+总体逻辑一致，若效果有区别：检查cpu/gpu训练，adv_norm,环境状态归一化。
 '''
 
 
@@ -183,7 +183,7 @@ class PPO:
         del P_model
 
     
-    def GAE(self,rewards, values, masks_1, masks_2, gamma, lam, last_value=None, MC=False,):
+    def GAE(self,rewards, values, masks_1, masks_2, gamma, lam, last_value=None, MC=False,adv_norm=False):
         ''' 计算GAE优势函数 
         一般来说
         mask_1 (td_delta) 表示 1-terminate
@@ -226,8 +226,8 @@ class PPO:
                     # 计算 Monte-Carlo 的 returns
                     future_return = rewards[t] + gamma * future_return * masks_2[t]
                     returns[t] = future_return
-
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            if adv_norm:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             del rewards, masks_1, masks_2, values
         
         return advantages, returns # [batch,1] ,[batch,1]
@@ -251,10 +251,16 @@ class PPO:
 
         # 计算优势函数
         ## mask 处理
-        mask_1 = torch.ones_like(rewards) # 最好是使用mask_1 来处理 terminate
+        # 如果batch 有masks_1 这个键
+        
+        mask_1 = batch['masks_1'] if 'masks_1' in batch else torch.ones_like(rewards) # 最好是使用mask_1 来处理 terminate
         mask_2 = batch['masks_2'] # [batch, ]
 
-        advantages, returns = self.GAE(rewards, value, mask_1, mask_2, gamma=self.config['PPO']['gamma'], lam=self.config['PPO']['lam'],last_value=last_value)        
+        advantages, returns = self.GAE(rewards, value, mask_1, mask_2, 
+                                       gamma=self.config['PPO']['gamma'], 
+                                       lam=self.config['PPO']['lam'],
+                                       last_value=last_value,
+                                       adv_norm = self.config['PPO'].get('adv_norm', False))        
         advantages = advantages.reshape(-1,1)
         returns = returns.reshape(-1,1)
         
@@ -286,10 +292,18 @@ class PPO:
                 ratio = torch.exp(new_log_probs - mini_log_probs)
 
                 # 计算策略损失
-                surr1 = ratio * mini_advantages
-                eps = self.config['PPO']['clip_epsilon']
-                surr2 = torch.clamp(ratio, 1.0 - eps, 1.0 + eps) * mini_advantages
-                policy_loss = -torch.min(surr1, surr2).mean() - self.config['PPO']['ent_weight'] * dist_entropy
+                if self.config['PPO'].get('use_sapo', False): # 无效果
+                    tau_pos = self.config['PPO'].get('sapo_tau_pos', 1.0)
+                    tau_neg = self.config['PPO'].get('sapo_tau_neg', 1.05)
+                    gate_pos = (4.0 / tau_pos) * torch.sigmoid(tau_pos * (ratio - 1.0))
+                    gate_neg = (4.0 / tau_neg) * torch.sigmoid(tau_neg * (ratio - 1.0))
+                    sapo_surrogate = torch.where(mini_advantages > 0, gate_pos, gate_neg)
+                    policy_loss = -(sapo_surrogate * mini_advantages).mean() - self.config['PPO']['ent_weight'] * dist_entropy
+                else:
+                    surr1 = ratio * mini_advantages
+                    eps = self.config['PPO']['clip_epsilon']
+                    surr2 = torch.clamp(ratio, 1.0 - eps, 1.0 + eps) * mini_advantages
+                    policy_loss = -torch.min(surr1, surr2).mean() - self.config['PPO']['ent_weight'] * dist_entropy
 
                 # 计算价值损失
                 value_pred = self.value(mini_batch_states) # [batch,1]
@@ -356,11 +370,16 @@ class PPO:
             if self.config.get('discrete', False):
                 # 保证形状为 [action_dim] 或 [1]，保存为 shape [1,1] 以便后续batch一致
                 if isinstance(action, torch.Tensor):
-                    action_to_env = action.item() if action.dim() == 0 else action.squeeze(0).item()
-                    action_save = torch.tensor([[int(action_to_env)]], dtype=torch.long)
+                    # action_to_env = action.item() if action.dim() == 0 else action.squeeze(0).item()
+                    # action_save = torch.tensor([[int(action_to_env)]], dtype=torch.long)
+                    action_save = action
+                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
+
                 else:
-                    action_to_env = int(action)
-                    action_save = torch.tensor([[action_to_env]], dtype=torch.long)
+                    # action_to_env = int(action)
+                    # action_save = torch.tensor([[action_to_env]], dtype=torch.long)
+                    action_save = action
+                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
             else:
                 action = action.squeeze(0).detach()
                 action_to_env = action
@@ -368,9 +387,10 @@ class PPO:
 
             next_state, reward, done, info = env_wrapper.step(self.state, action_to_env)
 
+            mask_1 = 1.0 - info['terminate']
             # mask: 1 - done，用于 GAE 中的 masks_2
-            mask = 1.0 - done
-            self.memory.push(state_tensor, action_save, reward, mask)
+            mask_2 = 1.0 - done
+            self.memory.push(state_tensor, action_save, reward, mask_1 , mask_2)
 
             self.state = next_state
             self.episode_reward += reward
@@ -393,7 +413,8 @@ class PPO:
                     'states': torch.stack(mem.state).to(self.device),
                     'actions': torch.stack(mem.action).to(self.device),
                     'rewards': torch.stack(mem.reward).to(self.device),
-                    'masks_2': torch.stack(mem.mask).to(self.device),
+                    'masks_1': torch.stack(mem.mask_1).to(self.device),
+                    'masks_2': torch.stack(mem.mask_2).to(self.device),
                 }
                 return batch
 
@@ -417,16 +438,16 @@ class PPO:
         self.train_return = []
         
         self.state = env_wrapper.reset()
-        self.memory = Memory(fields=('state', 'action', 'reward', 'mask'))
+        self.memory = Memory(fields=('state', 'action', 'reward', 'mask_1', 'mask_2')) 
 
     def eval_and_save(self, env_wrapper):
         """在训练循环中评估和保存模型"""
-        if self.episode_num % self.config['PPO']['eval_interval'] == 0 and self.episode_num > 0:
-            avg_reward_step = self.evaluate(env_wrapper, self.config['PPO']['eval_episodes'])
-            self.writer.add_scalar('Eval/Average Return', avg_reward_step, self.episode_num)
-            self.eval_history.append((self.episode_num, avg_reward_step))
-            if avg_reward_step > self.max_reward:
-                self.max_reward = avg_reward_step
+        if self.config['PPO']['eval_interval'] > 0 and self.episode_num % self.config['PPO']['eval_interval'] == 0 and self.episode_num > 0:
+            avg_reward = self.evaluate(env_wrapper, self.config['PPO']['eval_episodes'])
+            self.writer.add_scalar('Eval/Average Return', avg_reward, self.episode_num)
+            self.eval_history.append((self.episode_num, avg_reward))
+            if avg_reward > self.max_reward:
+                self.max_reward = avg_reward
                 self.save_model(name='best', iteration=self.episode_num)
                 self.writer.add_scalar('Eval/Best Return', self.max_reward, self.episode_num)
                 print(f"New best model saved with average return: {self.max_reward}")
@@ -434,7 +455,8 @@ class PPO:
     def train_post(self, env_wrapper):
         """训练结束后的收尾工作"""
         self.save_model(name='final', iteration=self.max_episodes) 
-        self.evaluate(env_wrapper, 10, for_best_model_eval=True,for_eval_data=self.config['collect_eval_data'])
+        for_best_model_eval = True if self.config['PPO']['eval_interval'] > 0 else False
+        self.evaluate(env_wrapper, 10, for_best_model_eval=for_best_model_eval,for_eval_data=self.config['collect_eval_data'])
 
     
     def train(self, env_wrapper, num_episodes, model_path: str = None):
@@ -494,7 +516,7 @@ class PPO:
                 
             total_reward.append(episode_reward.cpu().numpy())
             total_step.append(episode_steps)
-        avg_reward_step = [reward/step for reward, step in zip(total_reward, total_step)]
+        #avg_reward_step = [reward/step for reward, step in zip(total_reward, total_step)]
 
         if for_eval_data:
             np.savez(os.path.join(self.config["log_dir"] , 'eval_data.npz'), states=np.array(states), actions=np.array(actions),index = np.array(total_step))
@@ -504,7 +526,7 @@ class PPO:
             np.savez(os.path.join(self.config["log_dir"] , 'eval_rewards.npz'), episode_rewards=total_reward, episode_avg_rewards=episode_avg_rewards)
             return episode_avg_rewards , total_reward  
 
-        return np.mean(avg_reward_step)
+        return np.mean(total_reward)
     
 if __name__ == "__main__":
 
@@ -516,7 +538,7 @@ if __name__ == "__main__":
 
     
 
-    env = gym.make('Pendulum-v1') # 注意要在PPO_COBFIG里设置 'discrete', 以及改run_id
+    env = gym.make('BipedalWalker-v3') #('Pendulum-v1') # 注意要在PPO_COBFIG里设置 'discrete', 以及改run_id # BipedalWalker-v3
     #env = gym.make('Pendulum-v1')
     
     env_wrapper = gymEnvWrapper(env, PPO_COBFIG)
