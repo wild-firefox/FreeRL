@@ -165,6 +165,8 @@ class GAIL:
             
             # 4. 用新的奖励替换 batch 中的环境奖励
             batch['rewards'] = gail_rewards
+            for t, bonus in batch['truncation_bonuses']:
+                batch['rewards'][t] += bonus  # 模仿奖励替换了环境奖励，补回截断项
 
             # 5. PPO 使用这个修改后的 batch 进行学习
             last_value = self.ppo.value(torch.as_tensor(self.ppo.state, dtype=torch.float32).unsqueeze(0)).squeeze()

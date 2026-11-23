@@ -44,6 +44,14 @@ PPO_COBFIG = {
 
 
     
+    # PPO2_trpo.py 的两种 TRPO 共用这些参数；小批版本另外复用 PPO 的 K_epochs 和 mini_batch_size。
+    'TRPO': {
+        'max_kl': 0.01,
+        'damping': 0.1,  # 连续动作的阻尼；离散动作按参考笔记本使用 0
+        'cg_iters': 10,
+        'backtrack_coeff': 0.5,
+        'backtrack_iters': 15,
+    },
     'PPO': {
         ## liner
         'policy_mlp_dim': 128,

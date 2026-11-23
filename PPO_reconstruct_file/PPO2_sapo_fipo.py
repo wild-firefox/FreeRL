@@ -423,33 +423,20 @@ class PPO:
 
             # 与环境交互一步
             state_tensor = torch.as_tensor(self.state, dtype=torch.float32)
-            # 这里策略输出对离散/连续两类都兼容：
-            action = self.pi(state_tensor.unsqueeze(0))
-            # action 可能是 LongTensor (discrete) 或 FloatTensor (continuous)
-            if self.config.get('discrete', False):
-                # 保证形状为 [action_dim] 或 [1]，保存为 shape [1,1] 以便后续batch一致
-                if isinstance(action, torch.Tensor):
-                    # action_to_env = action.item() if action.dim() == 0 else action.squeeze(0).item()
-                    # action_save = torch.tensor([[int(action_to_env)]], dtype=torch.long)
-                    action_save = action
-                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
-
-                else:
-                    # action_to_env = int(action)
-                    # action_save = torch.tensor([[action_to_env]], dtype=torch.long)
-                    action_save = action
-                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
-            else:
-                action = action.squeeze(0).detach()
-                action_to_env = action
-                action_save = action
-
-            next_state, reward, done, info = env_wrapper.step(self.state, action_to_env)
+            # 离散索引由 wrapper 转成整数，连续动作仍由 wrapper 缩放。
+            action = self.pi(state_tensor.unsqueeze(0)).detach().reshape(-1)
+            next_state, reward, done, info = env_wrapper.step(self.state, action)
 
             mask_1 = 1.0 - info['terminate']
             # mask: 1 - done，用于 GAE 中的 masks_2
             mask_2 = 1.0 - done
-            self.memory.push(state_tensor, action_save, reward, mask_1 , mask_2)
+            learn_reward = reward
+            if done and not info['terminate']:
+                # 时间截断仍需 bootstrap。先计入截断末状态的价值，避免 GAE 使用 reset 后的状态。
+                with torch.no_grad():
+                    learn_reward = reward + self.config['PPO']['gamma'] * self.value(next_state).squeeze(-1)
+                mask_1 = torch.zeros_like(mask_1)
+            self.memory.push(state_tensor, action, learn_reward, mask_1, mask_2)
 
             self.state = next_state
             self.episode_reward += reward

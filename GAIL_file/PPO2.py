@@ -14,7 +14,7 @@ import time
 import numpy as np
 from torch import nn
 import copy
-from PPO2_utils import  mlp, Memory, gymEnvWrapper # PolicyEnvWrapper, load_npz
+from PPO2_utils import mlp, Memory, gymEnvWrapper # PolicyEnvWrapper, load_npz
 from torch.distributions import Normal, Categorical
 
 class Actor(nn.Module):
@@ -235,7 +235,6 @@ class PPO:
     def PPO_learn(self,batch,last_value=None):
         batch_states = batch['states'] # [batch, s_dim]
         batch_actions = batch['actions'] # [batch, a_dim] or [batch,1] for discrete
-        rewards = batch['rewards']  # [batch, ]
 
         with torch.no_grad():
             value = self.value(batch_states).squeeze(-1)
@@ -251,9 +250,9 @@ class PPO:
 
         # 计算优势函数
         ## mask 处理
-        # 如果batch 有masks_1 这个键
         
-        mask_1 = batch['masks_1'] if 'masks_1' in batch else torch.ones_like(rewards) # 最好是使用mask_1 来处理 terminate
+        rewards = batch['rewards']
+        mask_1 = batch.get('masks_1', torch.ones_like(rewards))
         mask_2 = batch['masks_2'] # [batch, ]
 
         advantages, returns = self.GAE(rewards, value, mask_1, mask_2, 
@@ -357,6 +356,7 @@ class PPO:
 
     
     def explore_env(self, env_wrapper):
+        truncation_bonuses = []  # 专供 GAIL 替换奖励时使用；普通 PPO 直接用 learn_reward。
 
         #while episode_num < max_episodes:
         while True:
@@ -364,33 +364,22 @@ class PPO:
 
             # 与环境交互一步
             state_tensor = torch.as_tensor(self.state, dtype=torch.float32)
-            # 这里策略输出对离散/连续两类都兼容：
-            action = self.pi(state_tensor.unsqueeze(0))
-            # action 可能是 LongTensor (discrete) 或 FloatTensor (continuous)
-            if self.config.get('discrete', False):
-                # 保证形状为 [action_dim] 或 [1]，保存为 shape [1,1] 以便后续batch一致
-                if isinstance(action, torch.Tensor):
-                    # action_to_env = action.item() if action.dim() == 0 else action.squeeze(0).item()
-                    # action_save = torch.tensor([[int(action_to_env)]], dtype=torch.long)
-                    action_save = action
-                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
-
-                else:
-                    # action_to_env = int(action)
-                    # action_save = torch.tensor([[action_to_env]], dtype=torch.long)
-                    action_save = action
-                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
-            else:
-                action = action.squeeze(0).detach()
-                action_to_env = action
-                action_save = action
-
-            next_state, reward, done, info = env_wrapper.step(self.state, action_to_env)
+            # 离散索引由 wrapper 转成整数，连续动作仍由 wrapper 缩放。
+            action = self.pi(state_tensor.unsqueeze(0)).detach().reshape(-1)
+            next_state, reward, done, info = env_wrapper.step(self.state, action)
 
             mask_1 = 1.0 - info['terminate']
             # mask: 1 - done，用于 GAE 中的 masks_2
             mask_2 = 1.0 - done
-            self.memory.push(state_tensor, action_save, reward, mask_1 , mask_2)
+            learn_reward = reward
+            if done and not info['terminate']:
+                # reset 前补末状态价值，GAE 不再从下一回合取值。
+                with torch.no_grad():
+                    bonus = self.config['PPO']['gamma'] * self.value(next_state).squeeze(-1)
+                    learn_reward = reward + bonus
+                mask_1 = torch.zeros_like(mask_1)
+                truncation_bonuses.append((len(self.memory), bonus))  # 记录截断步在本批的位置和 γV(末状态)。
+            self.memory.push(state_tensor, action, learn_reward, mask_1, mask_2)
 
             self.state = next_state
             self.episode_reward += reward
@@ -411,6 +400,7 @@ class PPO:
                 mem = self.memory.sample()
                 batch = {
                     'states': torch.stack(mem.state).to(self.device),
+                    'truncation_bonuses': truncation_bonuses,  # GAIL 覆盖环境奖励后，用它把补值加到模仿奖励上。
                     'actions': torch.stack(mem.action).to(self.device),
                     'rewards': torch.stack(mem.reward).to(self.device),
                     'masks_1': torch.stack(mem.mask_1).to(self.device),
@@ -438,7 +428,7 @@ class PPO:
         self.train_return = []
         
         self.state = env_wrapper.reset()
-        self.memory = Memory(fields=('state', 'action', 'reward', 'mask_1', 'mask_2')) 
+        self.memory = Memory(fields=('state', 'action', 'reward', 'mask_1', 'mask_2'))
 
     def eval_and_save(self, env_wrapper):
         """在训练循环中评估和保存模型"""

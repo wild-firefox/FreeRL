@@ -17,7 +17,7 @@ import time
 import numpy as np
 from torch import nn
 import importlib
-from PPO2_utils import  mlp, Memory
+from PPO2_utils import mlp, Memory
 
 
 class Actor(nn.Module):
@@ -163,7 +163,6 @@ class PPO:
     def PPO_learn(self,batch,last_value):
         batch_states = batch['states'] # [batch, s_dim]
         batch_actions = batch['actions'] # [batch, a_dim]
-        rewards = batch['rewards']  # [batch, ]
 
         with torch.no_grad():
 
@@ -175,7 +174,8 @@ class PPO:
 
         # 计算优势函数
         ## mask 处理
-        mask_1 = torch.ones_like(rewards)
+        rewards = batch['rewards']
+        mask_1 = batch.get('masks_1', torch.ones_like(rewards))
         mask_2 = batch['masks_2'] # [batch, ]
 
         advantages, returns = self.GAE(rewards, value, mask_1, mask_2, gamma=self.config['PPO']['gamma'], lam=self.config['PPO']['lam'],last_value=last_value)        
@@ -257,7 +257,7 @@ class PPO:
         state = env_wrapper.reset()
 
         # 用 Memory 做 “一个 horizon 的 buffer”
-        memory = Memory(fields=('state', 'action', 'reward', 'mask'))
+        memory = Memory(fields=('state', 'action', 'reward', 'mask_1', 'mask'))
 
         while episode_num < max_episodes:
             step += 1
@@ -269,7 +269,15 @@ class PPO:
 
             # mask: 1 - done，用于 GAE 中的 masks_2
             mask = 1.0 - float(done)
-            memory.push(state, action, reward, mask)
+            mask_1 = 1.0 - float(info['terminate'])
+            learn_reward = reward
+            if done and not info['terminate']:
+                # reset 前补末状态价值，GAE 不再从下一回合取值。
+                with torch.no_grad():
+                    bonus = self.config['PPO']['gamma'] * self.P_model.value(next_state).squeeze(-1)
+                    learn_reward = reward + bonus
+                mask_1 = 0.0
+            memory.push(state, action, learn_reward, mask_1, mask)
 
             state = next_state
             episode_reward += reward
@@ -295,6 +303,7 @@ class PPO:
                     'states': torch.as_tensor(np.array(mem.state), dtype=torch.float32),
                     'actions': torch.as_tensor(np.array(mem.action), dtype=torch.float32),
                     'rewards': torch.as_tensor(np.array(mem.reward), dtype=torch.float32),
+                    'masks_1': torch.as_tensor(mem.mask_1, dtype=torch.float32),
                     'masks_2': torch.as_tensor(np.array(mem.mask), dtype=torch.float32),
                 }
                 self.PPO_learn(batch, last_value)

@@ -195,8 +195,8 @@ class Env_model_trainEnvWrapper:
                 done = False
 
             reward = 0
-            info = {}
-            #info['terminate'] = torch.as_tensor(terminate, dtype=torch.float32).to(self.device)
+            # 模型环境仅因达到 horizon 截断，没有自然终止。
+            info = {'terminate': torch.zeros((), dtype=torch.float32, device=self.device)}
 
             #next_state = 2 * (next_state - self.env.observation_space.low) / (self.env.observation_space.high - self.env.observation_space.low) - 1
             return (torch.as_tensor(next_state, dtype=torch.float32).to(self.device),

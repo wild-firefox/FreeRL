@@ -17,7 +17,7 @@ import numpy as np
 from torch import nn
 import importlib
 import copy
-from PPO2_utils import  mlp, Memory, gymEnvWrapper # PolicyEnvWrapper, load_npz
+from PPO2_utils import mlp, Memory, gymEnvWrapper # PolicyEnvWrapper, load_npz
 
 
 class Actor(nn.Module):
@@ -212,7 +212,6 @@ class PPO:
     def PPO_learn(self,batch,last_value=None):
         batch_states = batch['states'] # [batch, s_dim]
         batch_actions = batch['actions'] # [batch, a_dim]
-        rewards = batch['rewards']  # [batch, ]
 
         with torch.no_grad():
 
@@ -224,7 +223,8 @@ class PPO:
 
         # 计算优势函数
         ## mask 处理
-        mask_1 = torch.ones_like(rewards) # 最好是使用mask_1 来处理 terminate
+        rewards = batch['rewards']
+        mask_1 = batch.get('masks_1', torch.ones_like(rewards))
         mask_2 = batch['masks_2'] # [batch, ]
 
         advantages, returns = self.GAE(rewards, value, mask_1, mask_2, gamma=self.config['PPO']['gamma'], lam=self.config['PPO']['lam'],last_value=last_value)        
@@ -310,7 +310,8 @@ class PPO:
             json.dump(self.config, f, indent=4)
 
     
-    def explore_env(self, env_wrapper):
+    def explore_env(self, env_wrapper, *, episode_ends=None):
+        truncation_bonuses = []  # 换成判别器奖励时，只需保留截断步的补值
 
         #while episode_num < max_episodes:
         while True:
@@ -323,7 +324,18 @@ class PPO:
 
             # mask: 1 - done，用于 GAE 中的 masks_2
             mask = 1.0 - done
-            self.memory.push(state_tensor, action, reward, mask)
+            if done and episode_ends is not None:
+                episode_ends.append((len(self.memory), next_state.detach().clone()))  # 仅 MAIL 的转移目标需要
+            mask_1 = 1.0 - info['terminate']
+            learn_reward = reward
+            if done and not info['terminate']:
+                # reset 前补末状态价值，GAE 不再从下一回合取值。
+                with torch.no_grad():
+                    bonus = self.config['PPO']['gamma'] * self.value(next_state).squeeze(-1)
+                    learn_reward = reward + bonus
+                mask_1 = torch.zeros_like(mask_1)
+                truncation_bonuses.append((len(self.memory), bonus))
+            self.memory.push(state_tensor, action, learn_reward, mask_1, mask)
 
             self.state = next_state
             self.episode_reward += reward
@@ -344,8 +356,10 @@ class PPO:
                 mem = self.memory.sample()
                 batch = {
                     'states': torch.stack(mem.state).to(self.device),
+                    'truncation_bonuses': truncation_bonuses,
                     'actions': torch.stack(mem.action).to(self.device),
                     'rewards': torch.stack(mem.reward).to(self.device),
+                    'masks_1': torch.stack(mem.mask_1).to(self.device),
                     'masks_2': torch.stack(mem.mask).to(self.device),
                 }
                 return batch
@@ -370,7 +384,7 @@ class PPO:
         self.train_return = []
         
         self.state = env_wrapper.reset()
-        self.memory = Memory(fields=('state', 'action', 'reward', 'mask'))
+        self.memory = Memory(fields=('state', 'action', 'reward', 'mask_1', 'mask'))
 
     def eval_and_save(self, env_wrapper):
         """在训练循环中评估和保存模型"""

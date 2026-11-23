@@ -185,7 +185,7 @@ class PPO:
     
     def GAE(self,rewards, values, masks_1, masks_2, gamma, lam, last_value=None, MC=False,adv_norm=False):
         ''' 计算GAE优势函数 
-        一般来说
+        一般来说 参考：https://zhuanlan.zhihu.com/p/512327050 的3.1的做法，
         mask_1 (td_delta) 表示 1-terminate
         mask_2 (gae)     表示  1-(terminate or truncation)
         令done = terminate or truncation 
@@ -356,33 +356,21 @@ class PPO:
 
             # 与环境交互一步
             state_tensor = torch.as_tensor(self.state, dtype=torch.float32)
-            # 这里策略输出对离散/连续两类都兼容：
-            action = self.pi(state_tensor.unsqueeze(0))
-            # action 可能是 LongTensor (discrete) 或 FloatTensor (continuous)
-            if self.config.get('discrete', False):
-                # 保证形状为 [action_dim] 或 [1]，保存为 shape [1,1] 以便后续batch一致
-                if isinstance(action, torch.Tensor):
-                    # action_to_env = action.item() if action.dim() == 0 else action.squeeze(0).item()
-                    # action_save = torch.tensor([[int(action_to_env)]], dtype=torch.long)
-                    action_save = action
-                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
-
-                else:
-                    # action_to_env = int(action)
-                    # action_save = torch.tensor([[action_to_env]], dtype=torch.long)
-                    action_save = action
-                    action_to_env = action.tanh().squeeze(0).detach().cpu().numpy()  # 先 tanh 再转换为 numpy 数组，保持与连续动作的处理一致
-            else:
-                action = action.squeeze(0).detach()
-                action_to_env = action
-                action_save = action
-
-            next_state, reward, done, info = env_wrapper.step(self.state, action_to_env)
+            # 离散索引由 wrapper 转成整数，连续动作仍由 wrapper 缩放。
+            action = self.pi(state_tensor.unsqueeze(0)).detach().reshape(-1)
+            next_state, reward, done, info = env_wrapper.step(self.state, action)
 
             mask_1 = 1.0 - info['terminate']
             # mask: 1 - done，用于 GAE 中的 masks_2
             mask_2 = 1.0 - done
-            self.memory.push(state_tensor, action_save, reward, mask_1 , mask_2)
+            learn_reward = reward
+            if done and not info['terminate']:
+                # 时间截断仍需 bootstrap。先计入截断末状态的价值，避免 GAE 使用 reset 后的状态。 给计算GAE时 使用 values[t + 1] 的做法 打的补丁，避免V[t+1]取到reset 后的状态
+                # PPO_file\PPO.py 的计算GAE的方法 不需要这个补丁, 因为 保存了每一步真实的 s_，可直接计算 critic(s_) 当前这样做的方法是节省内存
+                with torch.no_grad():
+                    learn_reward = reward + self.config['PPO']['gamma'] * self.value(next_state).squeeze(-1)
+                mask_1 = torch.zeros_like(mask_1)
+            self.memory.push(state_tensor, action, learn_reward, mask_1, mask_2)
 
             self.state = next_state
             self.episode_reward += reward

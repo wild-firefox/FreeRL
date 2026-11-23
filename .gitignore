@@ -29,6 +29,7 @@ test copy.py
 /GAIL_file/logs/Pendulum-v1/MAIL
 /GAIL_file/test.*
 /GAIL_file/MAIL*
+/GAIL_file/MAIL_origin/
 /GAIL_file/PPO2_for_MAIL.py
 /GAIL_file/layers.py
 /GAIL_file/GAIL copy.py
